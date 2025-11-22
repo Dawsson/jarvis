@@ -1,0 +1,21 @@
+{
+  "name": "jarvis",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@ricky0123/vad-node": "^0.0.3",
+    "groq": "^4.18.0",
+    "groq-sdk": "^0.36.0",
+    "node-record-lpcm16": "^1.0.1"
+  },
+  "trustedDependencies": [
+    "onnxruntime-node"
+  ]
+}
