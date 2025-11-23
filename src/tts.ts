@@ -34,11 +34,20 @@ export class TextToSpeech {
   }
 
   async speak(text: string, voice?: GroqVoice): Promise<void> {
+    // Clean text for consistent TTS
+    const cleanedText = text
+      .replace(/\*\*/g, '') // Remove markdown bold
+      .replace(/\*/g, '')   // Remove markdown italics
+      .replace(/`/g, '')    // Remove code backticks
+      .replace(/\n+/g, '. ') // Replace newlines with periods
+      .trim();
+
     const response = await this.client.audio.speech.create({
       model: 'playai-tts',
       voice: voice || this.voice,
-      input: text,
-      response_format: 'wav'
+      input: cleanedText,
+      response_format: 'wav',
+      speed: 1.2
     });
 
     // Save to temp file

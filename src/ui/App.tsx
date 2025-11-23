@@ -237,7 +237,9 @@ export function App() {
                 {response && (
                     <box style={{ padding: 1, maxWidth: "90%", marginTop: 1, flexDirection: "column" }}>
                         <text fg={C_GRAY}>Jarvis:</text>
-                        <text fg={C_SUCCESS}>{response}</text>
+                        {response.split('\n').map((line, i) => (
+                            <text key={i} fg={C_SUCCESS}>{line}</text>
+                        ))}
                     </box>
                 )}
 

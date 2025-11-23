@@ -6,7 +6,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { TextToSpeech } from "./tts";
 import { datetimeTool, calculatorTool, systemInfoTool } from "./tools";
-import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, saveNoteTool, getNoteTool, updateNotesTool } from "./tools/memory-tools";
+import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, updateNotesTool } from "./tools/memory-tools";
 import { memory } from "./memory";
 import { inspect } from "util";
 
@@ -122,28 +122,38 @@ export class JarvisEngine {
 
   private isRecording = false;
 
-  private async generateResponse(userInput: string): Promise<string> {
+  private async generateResponse(userInput: string): Promise<{ text: string; speechText: string; expectsFollowUp: boolean }> {
     try {
       const context = await memory.getContext();
 
-      const contextInfo = context.currentProject
+      const projectInfo = context.currentProject
         ? `Current project: ${context.currentProject}. Todos: ${context.activeTodos.map((t: any) => t.text).join(', ') || 'none'}.`
         : 'No active project.';
+
+      const notesInfo = Object.keys(context.notes).length > 0
+        ? `Notes: ${JSON.stringify(context.notes)}`
+        : 'No notes saved.';
 
       const result = await generateText({
         model: groq('meta-llama/llama-4-scout-17b-16e-instruct'),
         system: `You are JARVIS from Iron Man - a sophisticated British AI assistant. Address user as "Sir".
 Be concise, professional, and slightly witty. Speak naturally like a human - use contractions, casual phrasing, and smooth conversational flow.
 
-${contextInfo}
+${projectInfo}
+${notesInfo}
 
-CRITICAL: Call tools AND use their results in your response. Examples:
-- "create project X" → call createProject, say "Project X created, Sir"
-- "add todo X" → call addTodo, say "Added that for you, Sir"
-- "list todos" → call listTodos, tell user naturally what their todos are
-- "what time" → call datetime, tell user the time conversationally
+CRITICAL: Always respond with a single JSON object (NOT an array). Format:
+{"displayText": "text", "speechText": "text", "expectFollowUp": false}
 
-Always call the appropriate tool first, then use its result to answer naturally.`,
+WORKFLOW:
+1. If user needs tools (datetime, listTodos, etc), call them first
+2. Return ONE JSON object (not an array!)
+
+Examples:
+- "tell me about yourself" → {"displayText": "I'm JARVIS...", "speechText": "Sir, I'm JARVIS...", "expectFollowUp": false}
+- "what time is it" → Call datetime, then {"displayText": "3:56 PM", "speechText": "It's 3:56 PM, Sir", "expectFollowUp": false}
+
+Set expectFollowUp=true ONLY if asking user a question.`,
         prompt: userInput,
         tools: {
           datetime: datetimeTool,
@@ -158,7 +168,11 @@ Always call the appropriate tool first, then use its result to answer naturally.
           updateNotes: updateNotesTool
         },
         stopWhen: stepCountIs(5),
-        onStepFinish: ({ toolCalls, toolResults }) => {
+        onStepFinish: ({ toolCalls, toolResults, content, response, text }) => {
+          this.emit({ type: "log", data: `Text: ${inspect(text, { depth: Infinity })}` });
+          this.emit({ type: "log", data: `Response: ${inspect(response, { depth: Infinity })}` });
+          this.emit({ type: "log", data: `Content: ${inspect(content, { depth: Infinity })}` });
+
           // Log tool calls
           for (const toolCall of toolCalls) {
 this.emit({ type: "log", data: `TOOL CALL: ${inspect(toolCall, { depth: Infinity })}` });
@@ -182,10 +196,36 @@ this.emit({ type: "log", data: `TOOL CALL: ${inspect(toolCall, { depth: Infinity
         }
       });
 
-      return result.text || "Understood, Sir.";
+      // Parse JSON response from AI
+      const responseText = result.text || '{"displayText": "Understood, Sir.", "speechText": "Understood, Sir.", "expectFollowUp": false}';
+
+      let response;
+      try {
+        response = JSON.parse(responseText);
+      } catch (e) {
+        // Fallback if JSON parsing fails
+        response = {
+          displayText: responseText,
+          speechText: responseText,
+          expectFollowUp: false
+        };
+      }
+
+      return {
+        text: response.displayText,
+        speechText: response.speechText,
+        expectsFollowUp: response.expectFollowUp
+      };
     } catch (error: any) {
       console.error("AI Error:", error);
-      throw new Error(`Failed to generate response: ${error.message}`);
+      this.emit({ type: "log", data: `Full error: ${JSON.stringify(error, null, 2)}` });
+
+      // Return a fallback response instead of crashing
+      return {
+        text: "I apologize, Sir. I encountered an error processing your request.",
+        speechText: "I apologize, Sir. I encountered an error processing your request.",
+        expectsFollowUp: false
+      };
     }
   }
 
@@ -242,21 +282,28 @@ this.emit({ type: "log", data: `TOOL CALL: ${inspect(toolCall, { depth: Infinity
           this.emit({ type: "transcription", data: transcriptionText });
 
           // Step 2: Generate AI response with tools
-          const aiResponse = await this.generateResponse(transcriptionText);
-          this.emit({ type: "response", data: aiResponse });
+          const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(transcriptionText);
+          this.emit({ type: "response", data: displayText });
 
           // Step 3: Speak the response via TTS
           try {
-            if (aiResponse && aiResponse.trim().length > 0) {
-              await this.tts.speak(aiResponse);
+            if (speechText && speechText.trim().length > 0) {
+              await this.tts.speak(speechText);
             }
           } catch (ttsError: any) {
             this.emit({ type: "log", data: `TTS failed: ${ttsError.message}` });
           }
 
-          this.updateStatus("listening");
           this.isRecording = false;
-          this.ignoreWakeWord = false; // Resume wake word detection
+
+          // If follow-up expected, listen immediately without wake word
+          if (expectsFollowUp) {
+            this.emit({ type: "log", data: "Listening for follow-up..." });
+            await this.handleCommand();
+          } else {
+            this.updateStatus("listening");
+            this.ignoreWakeWord = false; // Resume wake word detection
+          }
         } catch (error: any) {
           this.emit({ type: "error", data: error?.message || "Processing failed" });
           this.updateStatus("listening");

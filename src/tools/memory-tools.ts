@@ -82,19 +82,14 @@ export const completeTodoTool: Tool = {
 };
 
 export const updateNotesTool: Tool = {
-  description: 'Update a note by key',
+  description: 'Update notes - replaces ALL notes. Provide a JSON string with all notes.',
   inputSchema: z.object({
-    notes: z.object({
-      key: z.string().describe('Note key'),
-      value: z.string().describe('Note content'),
-    }).array().describe('Notes to update'),
+    notesJson: z.string().describe('JSON string of all notes. Example: "{\\"name\\": \\"Dawson\\", \\"location\\": \\"SF\\"}"'),
   }),
-  execute: async ({ notes }: { notes: { [key: string]: string }[] }) => {
-    const notesObject: { [key: string]: string } = notes.reduce((acc, note) => {
-      acc[note.key!] = note.value!;
-      return acc;
-    }, {});
-    await memory.updateNotes(notesObject);
-    return `Notes updated`;
+  execute: async ({ notesJson }: { notesJson: string }) => {
+    const notes = JSON.parse(notesJson);
+    await memory.updateNotes(notes);
+    const keys = Object.keys(notes);
+    return `Updated ${keys.length} notes: ${keys.join(', ')}`;
   },
 };
