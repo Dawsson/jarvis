@@ -65,8 +65,36 @@ uvx --with tensorflow --with librosa --with pyaudio python3 scripts/training/3_t
 
 4. Run JARVIS:
 ```bash
+# Terminal UI mode
 bun run src/index.tsx
+
+# Web UI daemon mode (runs on http://localhost:7777)
+bun run daemon
 ```
+
+## Running in Background (tmux)
+
+To run the daemon in the background without keeping a terminal open:
+
+```bash
+# Start daemon in detached tmux session
+tmux new-session -d -s jarvis -c ~/projects/jarvis "bun run daemon"
+
+# Check if running
+tmux list-sessions | grep jarvis
+
+# View logs (attach to session)
+tmux attach-session -t jarvis
+# Press Ctrl+B, then D to detach
+
+# Stop daemon
+tmux kill-session -t jarvis
+```
+
+**tmux Keybinds**:
+- `Ctrl+B D` - Detach from session (daemon keeps running)
+- `Ctrl+B [` - Scroll mode (use arrow keys, `q` to exit)
+- `Ctrl+C` - Stop the daemon (while attached)
 
 ## Usage
 

@@ -117,7 +117,7 @@ console.log("Frontend built successfully");
 
 // Start Bun server with WebSocket support
 const server = Bun.serve({
-  port: 3000,
+  port: 7777,
   async fetch(req, server) {
     const url = new URL(req.url);
 
