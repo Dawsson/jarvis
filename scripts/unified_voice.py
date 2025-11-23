@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""
+Unified voice capture: wake word detection + recording with rolling buffer
+Captures 1.5 seconds BEFORE wake word for better transcription accuracy
+"""
+
+import numpy as np
+import librosa
+import pyaudio
+import json
+import tensorflow as tf
+from collections import deque
+import sys
+import wave
+import threading
+import select
+
+# Load wake word model
+model = tf.keras.models.load_model("jarvis_model/model.h5")
+
+with open("jarvis_model/metadata.json", "r") as f:
+    metadata = json.load(f)
+
+MAX_FRAMES = metadata["max_frames"]
+N_MFCC = metadata["n_mfcc"]
+
+# Audio configuration
+RATE = 48000  # High quality for recording
+CHUNK = 1024
+PRE_BUFFER_DURATION = 1.5  # Capture 1.5s before wake word
+SILENCE_DURATION = 1.2  # Stop after 1.2s of silence
+MAX_RECORDING_DURATION = 10.0  # Max 10s recording
+
+# Buffers
+pre_buffer_size = int(RATE * PRE_BUFFER_DURATION)
+pre_buffer = deque(maxlen=pre_buffer_size)
+
+# VAD settings
+SILENCE_THRESHOLD = 150
+SILENCE_CHUNKS_THRESHOLD = int((SILENCE_DURATION * RATE) / CHUNK)
+
+# Get microphone index
+mic_index = int(sys.argv[1]) if len(sys.argv) > 1 else None
+
+# Setup audio
+p = pyaudio.PyAudio()
+stream_kwargs = {
+    "format": pyaudio.paInt16,
+    "channels": 1,
+    "rate": RATE,
+    "input": True,
+    "frames_per_buffer": CHUNK,
+}
+
+if mic_index is not None:
+    stream_kwargs["input_device_index"] = mic_index
+
+stream = p.open(**stream_kwargs)
+
+# Flag for triggering immediate recording (for follow-ups)
+record_next = threading.Event()
+
+def stdin_listener():
+    """Listen for commands from Node.js via stdin"""
+    while True:
+        if select.select([sys.stdin], [], [], 0.1)[0]:
+            line = sys.stdin.readline().strip()
+            if line == "RECORD_NOW":
+                record_next.set()
+
+# Start stdin listener in background thread
+listener_thread = threading.Thread(target=stdin_listener, daemon=True)
+listener_thread.start()
+
+print("READY", flush=True)
+
+
+def downsample_for_detection(audio_48k):
+    """Downsample 48kHz audio to 16kHz for wake word model"""
+    audio_float = audio_48k.astype(np.float32) / 32768.0
+    audio_16k = librosa.resample(audio_float, orig_sr=RATE, target_sr=16000)
+    return audio_16k
+
+
+def extract_features(audio_16k):
+    """Extract MFCC features for wake word detection"""
+    mfcc = librosa.feature.mfcc(y=audio_16k, sr=16000, n_mfcc=N_MFCC, hop_length=256)
+
+    if mfcc.shape[1] < MAX_FRAMES:
+        pad_width = MAX_FRAMES - mfcc.shape[1]
+        mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
+    else:
+        mfcc = mfcc[:, :MAX_FRAMES]
+
+    return mfcc.T
+
+
+def is_silent(audio_data, threshold=0.01):
+    """Check if audio is too quiet"""
+    audio = np.array(audio_data, dtype=np.float32) / 32768.0
+    rms = np.sqrt(np.mean(audio**2))
+    return rms < threshold
+
+
+def calculate_rms(audio_chunk):
+    """Calculate RMS for VAD"""
+    audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
+    if len(audio_array) == 0:
+        return 0
+    rms_value = np.sqrt(np.mean(audio_array.astype(np.float64)**2))
+    if np.isnan(rms_value) or np.isinf(rms_value):
+        return 0
+    return int(rms_value)
+
+
+def save_recording(frames, filename="command.wav"):
+    """Save recorded audio to WAV file"""
+    wf = wave.open(filename, 'wb')
+    wf.setnchannels(1)
+    wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
+    wf.setframerate(RATE)
+    wf.writeframes(b''.join(frames))
+    wf.close()
+
+
+def record_command():
+    """Record audio after wake word until silence detected"""
+    frames = []
+
+    # Include pre-buffer (1.5s before wake word)
+    for chunk in pre_buffer:
+        frames.append(chunk.tobytes())
+
+    print(f"DEBUG: Pre-buffer included ({len(pre_buffer)} chunks)", flush=True)
+
+    silence_chunks = 0
+    recording_chunks = 0
+    max_chunks = int((MAX_RECORDING_DURATION * RATE) / CHUNK)
+
+    while recording_chunks < max_chunks:
+        data = stream.read(CHUNK, exception_on_overflow=False)
+        frames.append(data)
+        recording_chunks += 1
+
+        # Voice Activity Detection
+        rms = calculate_rms(data)
+
+        if rms < SILENCE_THRESHOLD:
+            silence_chunks += 1
+            if silence_chunks % 5 == 0:  # Log every 5 chunks
+                total_chunks = len(frames)
+                print(f"DEBUG: Silence chunks={silence_chunks}/{total_chunks}, RMS={rms}", flush=True)
+        else:
+            silence_chunks = 0  # Reset on voice detected
+
+        # Stop on prolonged silence
+        if silence_chunks >= SILENCE_CHUNKS_THRESHOLD:
+            print(f"DEBUG: Stopping - silence detected ({silence_chunks} chunks)", flush=True)
+            break
+
+    # Save to file
+    save_recording(frames)
+    print("RECORDING_COMPLETE", flush=True)
+
+
+# Main loop
+frame_count = 0
+cooldown_frames = 0
+
+try:
+    while True:
+        # Check for immediate recording request (follow-up)
+        if record_next.is_set():
+            record_next.clear()
+            print("DEBUG: Follow-up recording triggered", flush=True)
+            record_command()
+            pre_buffer.clear()
+            frame_count = 0
+            continue
+
+        data = stream.read(CHUNK, exception_on_overflow=False)
+        audio_chunk = np.frombuffer(data, dtype=np.int16)
+
+        # Always add to pre-buffer (rolling window)
+        pre_buffer.extend(audio_chunk)
+
+        # Decrease cooldown
+        if cooldown_frames > 0:
+            cooldown_frames -= 1
+
+        # Run wake word detection every 5 frames
+        frame_count += 1
+        if frame_count >= 5 and len(pre_buffer) >= pre_buffer_size and cooldown_frames == 0:
+            frame_count = 0
+
+            # Skip if too quiet
+            if is_silent(list(pre_buffer)):
+                continue
+
+            # Downsample for wake word detection
+            audio_16k = downsample_for_detection(np.array(list(pre_buffer)))
+
+            # Extract features and run detection
+            features = extract_features(audio_16k)
+            features = np.expand_dims(features, axis=0)
+            prediction = model.predict(features, verbose=0)[0][0]
+
+            if prediction > 0.8:
+                print(f"DETECTED:{prediction:.3f}", flush=True)
+                cooldown_frames = 10  # Cooldown after detection
+
+                # Start recording (includes pre-buffer)
+                record_command()
+
+                # Reset for next detection
+                pre_buffer.clear()
+                frame_count = 0
+
+except KeyboardInterrupt:
+    pass
+
+stream.stop_stream()
+stream.close()
+p.terminate()

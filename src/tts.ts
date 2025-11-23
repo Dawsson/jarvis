@@ -47,7 +47,7 @@ export class TextToSpeech {
       voice: voice || this.voice,
       input: cleanedText,
       response_format: 'wav',
-      speed: 1.2
+      speed: 1.6
     });
 
     // Save to temp file

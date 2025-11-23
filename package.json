@@ -6,15 +6,18 @@
   "scripts": {
     "dev": "bun src/index.tsx",
     "start": "bun src/index.tsx",
+    "daemon": "bun --hot src/daemon.ts",
     "collect": "uvx --with pyaudio --with numpy python3 scripts/training/1_collect_samples.py",
     "train": "uvx --with tensorflow --with librosa --with scikit-learn --with soundfile python3 scripts/training/2_train_model.py",
     "test-model": "uvx --with tensorflow --with librosa --with pyaudio python3 scripts/training/3_test_model.py",
-    "list-mics": "uvx --with pyaudio python3 scripts/list_microphones.py"
+    "list-mics": "uvx --with pyaudio python3 scripts/list_microphones.py",
+    "build": "bun build src/web/app.tsx --outdir dist"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^24.10.1",
-    "@types/react": "^19.2.6"
+    "@types/react": "^19.2.6",
+    "@types/react-dom": "^19.2.3"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -29,6 +32,7 @@
     "lowdb": "^7.0.1",
     "node-record-lpcm16": "^1.0.1",
     "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "wav-decoder": "^1.3.0",
     "zod": "^4.1.12"
   },

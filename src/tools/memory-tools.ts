@@ -81,6 +81,20 @@ export const completeTodoTool: Tool = {
   },
 };
 
+export const deleteTodoTool: Tool = {
+  description: 'Delete a todo by number',
+  inputSchema: z.object({
+    number: z.number().describe('Todo number (1, 2, 3...)'),
+  }),
+  execute: async ({ number }: { number: number }) => {
+    const todos = await memory.getActiveTodos();
+    const todo = todos[number - 1];
+    if (!todo) return `No todo #${number}`;
+    await memory.deleteTodo(todo.id);
+    return `Deleted: "${todo.text}"`;
+  },
+};
+
 export const updateNotesTool: Tool = {
   description: 'Update notes - replaces ALL notes. Provide a JSON string with all notes.',
   inputSchema: z.object({
