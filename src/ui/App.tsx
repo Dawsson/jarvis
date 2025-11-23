@@ -41,12 +41,25 @@ export function App() {
       renderer.console.clear(); // Start clean
   }, [renderer]);
 
-  // Load microphones and auto-select MacBook Pro Microphone if available
+  // Load microphones and auto-select preferred microphone from memory
   useEffect(() => {
-    listMicrophones().then((mics) => {
+    Promise.all([
+      listMicrophones(),
+      memory.getPreferredMicrophone()
+    ]).then(([mics, preferredMic]) => {
       setMicrophones(mics);
 
-      // Try to find MacBook Pro Microphone
+      // Try to use preferred microphone from memory
+      if (preferredMic.index !== null && preferredMic.name) {
+        // Verify the microphone still exists
+        const mic = mics.find(m => m.index === preferredMic.index);
+        if (mic) {
+          setSelectedMic(preferredMic.index);
+          return;
+        }
+      }
+
+      // Fallback: Try to find MacBook Pro Microphone if no preference saved
       const macbookMic = mics.find(m => m.name.toLowerCase().includes("macbook pro microphone"));
       if (macbookMic) {
         setSelectedMic(macbookMic.index);

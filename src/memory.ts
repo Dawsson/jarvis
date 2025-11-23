@@ -1,5 +1,6 @@
 import { JSONFilePreset } from 'lowdb/node'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { mkdir } from 'fs/promises'
 
 export interface Todo {
   id: string
@@ -15,26 +16,49 @@ export interface Project {
   createdAt: string
 }
 
+export interface CustomWord {
+  id: string
+  word: string
+  phonetic?: string
+  context?: string
+  createdAt: string
+}
+
 export interface Memory {
   projects: Project[]
   currentProjectId: string | null
   notes: { [key: string]: string }
+  preferredMicrophoneIndex: number | null
+  preferredMicrophoneName: string | null
+  customWords: CustomWord[]
 }
 
 const defaultData: Memory = {
   projects: [],
   currentProjectId: null,
-  notes: {}
+  notes: {},
+  preferredMicrophoneIndex: null,
+  preferredMicrophoneName: null,
+  customWords: []
 }
 
 // Initialize database
-const dbPath = join(process.cwd(), 'jarvis-memory.json')
+const dbPath = join(process.cwd(), '.memory', 'jarvis-memory.json')
 let db: any = null;
 
 async function getDb() {
   if (!db) {
     try {
+      // Ensure .memory directory exists
+      await mkdir(dirname(dbPath), { recursive: true });
       db = await JSONFilePreset<Memory>(dbPath, defaultData);
+      
+      // Ensure customWords field exists (for backward compatibility)
+      if (!db.data.customWords) {
+        db.data.customWords = [];
+        await db.write();
+      }
+      
       console.log('[Memory] Database initialized:', dbPath);
     } catch (error) {
       console.error('[Memory] Failed to initialize database:', error);
@@ -180,12 +204,76 @@ export const memory = {
     return database.data.notes;
   },
 
+  // Microphone preferences
+  setPreferredMicrophone: async (index: number | null, name: string | null) => {
+    const database = await getDb();
+    database.data.preferredMicrophoneIndex = index;
+    database.data.preferredMicrophoneName = name;
+    await database.write();
+    console.log(`[Memory] Preferred microphone set to: ${name || 'default'} (index: ${index})`);
+  },
+
+  getPreferredMicrophone: async () => {
+    const database = await getDb();
+    return {
+      index: database.data.preferredMicrophoneIndex ?? null,
+      name: database.data.preferredMicrophoneName ?? null
+    };
+  },
+
+  // Custom words for speech recognition
+  addCustomWord: async (word: string, phonetic?: string, context?: string) => {
+    const database = await getDb();
+    
+    // Ensure customWords array exists
+    if (!database.data.customWords) {
+      database.data.customWords = [];
+    }
+    
+    const customWord: CustomWord = {
+      id: Date.now().toString(),
+      word,
+      phonetic,
+      context,
+      createdAt: new Date().toISOString()
+    };
+    database.data.customWords.push(customWord);
+    await database.write();
+    console.log(`[Memory] Added custom word: ${word}${phonetic ? ` (phonetic: ${phonetic})` : ''}`);
+    return customWord;
+  },
+
+  getCustomWords: async () => {
+    const database = await getDb();
+    return database.data.customWords || [];
+  },
+
+  updateCustomWord: async (id: string, updates: Partial<Omit<CustomWord, 'id' | 'createdAt'>>) => {
+    const database = await getDb();
+    const customWord = database.data.customWords.find((cw: CustomWord) => cw.id === id);
+    if (customWord) {
+      Object.assign(customWord, updates);
+      await database.write();
+      return customWord;
+    }
+    return null;
+  },
+
+  deleteCustomWord: async (id: string) => {
+    const database = await getDb();
+    database.data.customWords = database.data.customWords.filter((cw: CustomWord) => cw.id !== id);
+    await database.write();
+  },
+
   // Get all data for AI context
   getContext: async () => {
     const database = await getDb();
     const currentProject = await memory.getCurrentProject()
     const activeTodos = currentProject?.todos.filter((t: Todo) => !t.completed) || []
 
+    const preferredMic = await memory.getPreferredMicrophone();
+    const customWords = database.data?.customWords || [];
+    
     return {
       currentProject: currentProject?.name || null,
       activeTodos: activeTodos,
@@ -193,7 +281,14 @@ export const memory = {
         name: p.name,
         todoCount: p.todos.filter((t: Todo) => !t.completed).length
       })),
-      notes: database.data?.notes || {}
+      notes: database.data?.notes || {},
+      preferredMicrophone: preferredMic.name || null,
+      preferredMicrophoneIndex: preferredMic.index,
+      customWords: customWords.map((cw: CustomWord) => ({
+        word: cw.word,
+        phonetic: cw.phonetic,
+        context: cw.context
+      }))
     }
   }
 }

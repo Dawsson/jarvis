@@ -5,13 +5,33 @@ import { generateText } from 'ai';
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { TextToSpeech } from "./tts";
-import { datetimeTool, calculatorTool, systemInfoTool } from "./tools";
+import {
+  datetimeTool,
+  calculatorTool,
+  systemInfoTool,
+  spotifyPlayTool,
+  spotifyPauseTool,
+  spotifyPlayPauseTool,
+  spotifyNextTool,
+  spotifyPreviousTool,
+  spotifyCurrentTrackTool,
+  spotifyShuffleTool,
+  volumeTool,
+  setMicrophoneTool,
+  setEngineInstance,
+  contextDumpTool
+} from "./tools";
 import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, deleteTodoTool, updateNotesTool } from "./tools/memory-tools";
+import { addReminderTool, listRemindersTool, deleteReminderTool } from "./tools/reminder-tools";
 import { memory } from "./memory";
+import { commonWords } from "./memory/common-words";
+import { conversationHistory } from "./memory/conversation-history";
+import { reminders } from "./memory/reminders";
 
 export interface JarvisConfig {
   microphoneIndex: number | null; // null = default
   groqApiKey: string;
+  microphoneName?: string; // Optional: name of the microphone device
 }
 
 export type JarvisStatus =
@@ -37,6 +57,8 @@ export class JarvisEngine {
   constructor(config: JarvisConfig) {
     this.config = config;
     this.tts = new TextToSpeech(config.groqApiKey, 'Basil-PlayAI');
+    // Register this engine instance so tools can access it
+    setEngineInstance(this);
   }
 
   on(type: string, handler: (event: JarvisEvent) => void) {
@@ -83,12 +105,23 @@ export class JarvisEngine {
       if (message === "READY") {
         this.emit({ type: "log", data: "Voice system ready" });
       } else if (message.startsWith("DETECTED:")) {
-        // Ignore wake word detections while busy
+        const confidence = parseFloat(message.split(":")[1]);
+        
+        // If Jarvis is currently speaking (processing), cancel the speech
+        if (this.status === "processing") {
+          this.emit({ type: "log", data: "Interrupted by wake word - stopping speech" });
+          this.emit({ type: "wake-word", data: { confidence, interrupted: true } });
+          this.tts.cancel();
+          this.isRecording = false;
+          this.updateStatus("listening");
+          return;
+        }
+
+        // Ignore wake word detections while busy (but not while processing/speaking)
         if (this.status !== "listening") {
           return;
         }
 
-        const confidence = parseFloat(message.split(":")[1]);
         this.updateStatus("wake-word-detected");
         this.emit({ type: "wake-word", data: { confidence } });
 
@@ -122,6 +155,8 @@ export class JarvisEngine {
     this.wakeWordDetector?.kill();
     this.wakeWordDetector = null;
     this.updateStatus("idle");
+    // Unregister engine instance when stopped
+    setEngineInstance(null);
   }
 
   private updateStatus(status: JarvisStatus) {
@@ -143,13 +178,51 @@ export class JarvisEngine {
         ? `Notes: ${JSON.stringify(context.notes)}`
         : 'No notes saved.';
 
+      const micInfo = context.preferredMicrophone
+        ? `Preferred microphone: ${context.preferredMicrophone}`
+        : 'Using default microphone.';
+
+      const customWordsInfo = context.customWords && context.customWords.length > 0
+        ? `Custom words for recognition: ${context.customWords.map((cw: any) => {
+            if (cw.phonetic) {
+              return `${cw.word} (sounds like: ${cw.phonetic})`;
+            }
+            return cw.word;
+          }).join(', ')}`
+        : 'No custom words saved.';
+
+      // Get active reminders
+      const activeReminders = await reminders.getActive();
+      const remindersInfo = activeReminders.length > 0
+        ? `Active reminders:\n${activeReminders.map((r: any) => 
+            `- "${r.text}" at ${new Date(r.scheduledTime).toLocaleString()}`
+          ).join('\n')}`
+        : 'No active reminders.';
+
+      // Get recent conversation history (last 5 exchanges = 10 messages)
+      const recentHistory = await conversationHistory.getRecent(10);
+      const conversationInfo = recentHistory.length > 0
+        ? `Recent conversation:\n${recentHistory.map((msg: any) => 
+            `${msg.role === 'user' ? 'User' : 'Jarvis'}: ${msg.content}`
+          ).join('\n')}`
+        : '';
+
+      // Current time
+      const currentTime = new Date().toLocaleString();
+      const timeInfo = `Current time: ${currentTime}`;
+
       const result = await generateText({
         model: groq('meta-llama/llama-4-scout-17b-16e-instruct'),
         system: `You are JARVIS from Iron Man - a sophisticated British AI assistant. Address user as "Sir".
 Be professional and slightly witty. Speak naturally like a human - use contractions and casual phrasing.
 
+${timeInfo}
 ${projectInfo}
 ${notesInfo}
+${micInfo}
+${customWordsInfo}
+${remindersInfo}
+${conversationInfo}
 
 CRITICAL: Always respond with a single JSON object (NOT an array). Format:
 {"displayText": "text", "speechText": "text", "expectFollowUp": false}
@@ -158,8 +231,10 @@ displayText: Can be detailed, with full information.
 speechText: Should be natural and conversational, but reasonably concise (2-3 sentences). This is spoken aloud via TTS.
 
 WORKFLOW:
-1. If user needs tools (datetime, listTodos, etc), call them first
-2. Return ONE JSON object (not an array!)
+1. If user needs tools (datetime, listTodos, volume, spotify commands, etc), you MUST call them first
+2. NEVER claim to have done something without actually calling the tool
+3. For volume commands ("set volume to X", "volume to X%", etc), you MUST call the volume tool
+4. After tool execution, return ONE JSON object (not an array!)
 
 SPEECH RULES:
 - speechText should sound natural when spoken aloud
@@ -174,9 +249,10 @@ DO NOT set expectFollowUp=true for: statements, confirmations, info delivery, ca
 
 Examples:
 - "tell me about yourself" → {"displayText": "I'm JARVIS, your AI assistant. I can help with tasks, manage projects, answer questions, and more.", "speechText": "I'm JARVIS, Sir. I'm your AI assistant, here to help with tasks, projects, and questions.", "expectFollowUp": false}
-- "what time is it" → Call datetime, then {"displayText": "It's 3:56 PM", "speechText": "It's 3:56 PM, Sir", "expectFollowUp": false}
-- "create a todo to buy milk" → {"displayText": "Todo created: Buy milk", "speechText": "I've added that to your list, Sir", "expectFollowUp": false}
-- "what's on my todo list" → Call listTodos, then {"displayText": "Your todos:\n1. Buy milk\n2. Call dentist\n3. Fix bug", "speechText": "You have three items, Sir. Buy milk, call the dentist, and fix a bug", "expectFollowUp": false}
+- "what time is it" → Call datetime tool, then {"displayText": "It's 3:56 PM", "speechText": "It's 3:56 PM, Sir", "expectFollowUp": false}
+- "set volume to 50%" → Call volume tool with volume=50, then {"displayText": "Volume set to 50%", "speechText": "Volume set to 50%, Sir", "expectFollowUp": false}
+- "create a todo to buy milk" → Call addTodo tool, then {"displayText": "Todo created: Buy milk", "speechText": "I've added that to your list, Sir", "expectFollowUp": false}
+- "what's on my todo list" → Call listTodos tool, then {"displayText": "Your todos:\n1. Buy milk\n2. Call dentist\n3. Fix bug", "speechText": "You have three items, Sir. Buy milk, call the dentist, and fix a bug", "expectFollowUp": false}
 
 Default to expectFollowUp=false unless absolutely necessary.`,
         prompt: userInput,
@@ -191,7 +267,20 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           listTodos: listTodosTool,
           completeTodo: completeTodoTool,
           deleteTodo: deleteTodoTool,
-          updateNotes: updateNotesTool
+          updateNotes: updateNotesTool,
+          addReminder: addReminderTool,
+          listReminders: listRemindersTool,
+          deleteReminder: deleteReminderTool,
+          spotifyPlay: spotifyPlayTool,
+          spotifyPause: spotifyPauseTool,
+          spotifyPlayPause: spotifyPlayPauseTool,
+          spotifyNext: spotifyNextTool,
+          spotifyPrevious: spotifyPreviousTool,
+          spotifyCurrentTrack: spotifyCurrentTrackTool,
+          spotifyShuffle: spotifyShuffleTool,
+          volume: volumeTool,
+          setMicrophone: setMicrophoneTool,
+          contextDump: contextDumpTool
         },
         stopWhen: stepCountIs(5),
         onStepFinish: ({ toolCalls }) => {
@@ -246,6 +335,24 @@ Default to expectFollowUp=false unless absolutely necessary.`,
 
     try {
       // Step 1: Transcribe audio using AI SDK
+      // Load common words and custom words to help Whisper recognize them
+      const [commonWordsList, customWords] = await Promise.all([
+        commonWords.getAll(),
+        memory.getCustomWords()
+      ]);
+      
+      // Combine common words and custom words for Whisper prompt
+      const allWords = [...commonWordsList, ...customWords];
+      const whisperPrompt = allWords
+        .map(cw => {
+          // Include both the word and phonetic spelling if available
+          if (cw.phonetic) {
+            return `${cw.word}, ${cw.phonetic}`;
+          }
+          return cw.word;
+        })
+        .join(', ');
+      
       const audioBuffer = await readFile(tempFile);
       const transcriptResult = await transcribe({
         model: groq.transcription('whisper-large-v3-turbo'),
@@ -253,7 +360,8 @@ Default to expectFollowUp=false unless absolutely necessary.`,
         providerOptions: {
           groq: {
             language: 'en',
-            temperature: 0
+            temperature: 0,
+            ...(whisperPrompt && { prompt: whisperPrompt })
           }
         }
       });
@@ -261,30 +369,45 @@ Default to expectFollowUp=false unless absolutely necessary.`,
       const transcriptionText = transcriptResult.text;
       this.emit({ type: "transcription", data: transcriptionText });
 
+      // Save user message to conversation history
+      await conversationHistory.add('user', transcriptionText);
+
       // Step 2: Generate AI response with tools
       const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(transcriptionText);
+      
+      // Save assistant response to conversation history
+      await conversationHistory.add('assistant', speechText || displayText);
       this.emit({ type: "response", data: displayText });
 
       // Step 3: Speak the response via TTS
+      // Keep status as "processing" while speaking so wake word can interrupt
       try {
         if (speechText && speechText.trim().length > 0) {
           await this.tts.speak(speechText);
         }
       } catch (ttsError: any) {
-        this.emit({ type: "log", data: `TTS failed: ${ttsError.message}` });
+        // Ignore cancellation errors (they're expected when interrupted)
+        if (!ttsError.message?.includes("SIGTERM") && !ttsError.message?.includes("killed")) {
+          this.emit({ type: "log", data: `TTS failed: ${ttsError.message}` });
+        }
       }
+      
+      // Update status after TTS completes (or is cancelled)
+      // Only change status if we're still processing (not already interrupted)
+      if (this.status === "processing") {
+        this.isRecording = false;
 
-      this.isRecording = false;
-
-      // If follow-up expected, trigger immediate recording
-      if (expectsFollowUp) {
-        this.emit({ type: "log", data: "Listening for follow-up..." });
-        this.updateStatus("recording");
-        // Send command to unified script to record immediately
-        this.wakeWordDetector?.stdin?.write("RECORD_NOW\n");
-      } else {
-        this.updateStatus("listening");
+        // If follow-up expected, trigger immediate recording
+        if (expectsFollowUp) {
+          this.emit({ type: "log", data: "Listening for follow-up..." });
+          this.updateStatus("recording");
+          // Send command to unified script to record immediately
+          this.wakeWordDetector?.stdin?.write("RECORD_NOW\n");
+        } else {
+          this.updateStatus("listening");
+        }
       }
+      // If status is not "processing", it means we were interrupted and status was already reset
     } catch (error: any) {
       this.emit({ type: "error", data: error?.message || "Processing failed" });
       this.updateStatus("listening");

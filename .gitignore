@@ -42,5 +42,5 @@ temp_audio.wav
 command.wav
 *.wav
 
-# Memory database
-jarvis-memory.json
+# Memory database folder
+.memory/

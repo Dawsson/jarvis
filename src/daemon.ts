@@ -2,7 +2,14 @@ import type { ServerWebSocket } from "bun";
 import { JarvisEngine, type JarvisEvent, type JarvisStatus } from "./jarvis-engine";
 import type { ServerMessage, ClientMessage, JarvisState } from "./types/websocket";
 import { memory } from "./memory";
+import { reminders } from "./memory/reminders";
+import { TextToSpeech } from "./tts";
 import { listMicrophones } from "./list-microphones";
+import { killExistingInstances } from "./utils/kill-existing";
+
+// Kill any existing instances before starting
+console.log("🔍 Checking for existing instances...");
+killExistingInstances(7777);
 
 // Store connected clients
 const clients = new Set<ServerWebSocket<{ id: string }>>();
@@ -25,10 +32,22 @@ if (!apiKey) {
   process.exit(1);
 }
 
+// Load preferred microphone from memory
+const preferredMic = await memory.getPreferredMicrophone();
+const initialMicIndex = preferredMic.index;
+if (preferredMic.name) {
+  console.log(`🎤 Using preferred microphone: ${preferredMic.name} (index: ${initialMicIndex})`);
+} else {
+  console.log(`🎤 Using default microphone`);
+}
+
 const jarvis = new JarvisEngine({
-  microphoneIndex: null, // Use default microphone
+  microphoneIndex: initialMicIndex,
   groqApiKey: apiKey,
 });
+
+// Initialize TTS for reminder announcements
+const tts = new TextToSpeech(apiKey);
 
 // Helper to broadcast to all clients
 function broadcast(message: ServerMessage) {
@@ -187,7 +206,23 @@ const server = Bun.serve({
           ws.send(JSON.stringify({ type: "connected", data: { timestamp: new Date().toISOString() } }));
         } else if (data.type === "change-microphone") {
           await jarvis.updateMicrophone(data.microphoneIndex);
-          addLog(`Microphone changed to ${data.microphoneIndex === null ? "default" : `index ${data.microphoneIndex}`}`);
+          
+          // Save to memory as preferred microphone
+          if (data.microphoneIndex !== null) {
+            const mics = await listMicrophones();
+            const mic = mics.find(m => m.index === data.microphoneIndex);
+            if (mic) {
+              await memory.setPreferredMicrophone(mic.index, mic.name);
+              addLog(`Microphone changed to ${mic.name} (index: ${mic.index})`);
+            } else {
+              await memory.setPreferredMicrophone(data.microphoneIndex, null);
+              addLog(`Microphone changed to index ${data.microphoneIndex}`);
+            }
+          } else {
+            await memory.setPreferredMicrophone(null, null);
+            addLog(`Microphone changed to default`);
+          }
+          
           broadcast({
             type: "jarvis-event",
             event: { type: "log", data: `Microphone updated` },
@@ -218,9 +253,56 @@ console.log(`🚀 Jarvis Daemon running at http://localhost:${server.port}`);
 console.log(`📡 WebSocket server ready for connections`);
 console.log(`🎤 Listening for wake word...`);
 
+// Reminder checker - runs every minute
+let reminderCheckInterval: ReturnType<typeof setInterval> | null = null;
+
+async function checkReminders() {
+  try {
+    const dueReminders = await reminders.getDue();
+    
+    for (const reminder of dueReminders) {
+      // Announce reminder via TTS
+      const announcement = `Reminder, Sir. ${reminder.text}`;
+      console.log(`🔔 Reminder: ${reminder.text}`);
+      addLog(`🔔 Reminder: ${reminder.text}`);
+      
+      try {
+        await tts.speak(announcement);
+        // Mark as completed after announcing
+        await reminders.markCompleted(reminder.id);
+        console.log(`✅ Reminder completed: ${reminder.text}`);
+      } catch (error: any) {
+        console.error(`Failed to announce reminder: ${error.message}`);
+        addLog(`ERR: Failed to announce reminder: ${reminder.text}`);
+      }
+      
+      // Broadcast reminder event to clients
+      broadcast({
+        type: "jarvis-event",
+        event: { 
+          type: "log", 
+          data: `🔔 Reminder: ${reminder.text}` 
+        },
+      });
+    }
+  } catch (error: any) {
+    console.error(`Error checking reminders: ${error.message}`);
+  }
+}
+
+// Start reminder checker (check every 60 seconds)
+reminderCheckInterval = setInterval(checkReminders, 60 * 1000);
+console.log(`⏰ Reminder checker started (checking every 60 seconds)`);
+
+// Check immediately on startup
+checkReminders();
+
 // Graceful shutdown
 process.on("SIGINT", () => {
   console.log("\nShutting down...");
+  if (reminderCheckInterval) {
+    clearInterval(reminderCheckInterval);
+  }
   jarvis.stop();
   server.stop();
   process.exit(0);

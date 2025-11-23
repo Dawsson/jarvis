@@ -11,6 +11,7 @@
     "train": "uvx --with tensorflow --with librosa --with scikit-learn --with soundfile python3 scripts/training/2_train_model.py",
     "test-model": "uvx --with tensorflow --with librosa --with pyaudio python3 scripts/training/3_test_model.py",
     "list-mics": "uvx --with pyaudio python3 scripts/list_microphones.py",
+    "add-word": "bun scripts/add-word.ts",
     "build": "bun build src/web/app.tsx --outdir dist"
   },
   "devDependencies": {
