@@ -109,6 +109,61 @@ def is_silent(audio_data, threshold=0.01):
     return rms < threshold
 
 
+def is_vibration_sound(audio_16k):
+    """
+    Detect if audio matches the vibration sound pattern.
+    Vibration sound is a low-frequency tone (~42Hz) with harmonics.
+    Returns True if audio looks like the vibration sound.
+    """
+    # Calculate power spectral density
+    stft = librosa.stft(audio_16k, n_fft=2048, hop_length=512)
+    magnitude = np.abs(stft)
+    freqs = librosa.fft_frequencies(sr=16000, n_fft=2048)
+    
+    # Vibration sound frequency range (40-50Hz, with harmonics at 84-100Hz, 126-150Hz)
+    vibration_freq_low = 40
+    vibration_freq_high = 50
+    harmonic2_low = 80
+    harmonic2_high = 100
+    harmonic3_low = 120
+    harmonic3_high = 150
+    
+    # Calculate energy in vibration frequency bands
+    vibration_mask = (freqs >= vibration_freq_low) & (freqs <= vibration_freq_high)
+    harmonic2_mask = (freqs >= harmonic2_low) & (freqs <= harmonic2_high)
+    harmonic3_mask = (freqs >= harmonic3_low) & (freqs <= harmonic3_high)
+    
+    vibration_energy = np.sum(magnitude[vibration_mask, :])
+    harmonic2_energy = np.sum(magnitude[harmonic2_mask, :])
+    harmonic3_energy = np.sum(magnitude[harmonic3_mask, :])
+    total_energy = np.sum(magnitude)
+    
+    # Calculate ratios
+    if total_energy < 1e-10:
+        return False
+    
+    vibration_ratio = vibration_energy / total_energy
+    harmonic2_ratio = harmonic2_energy / total_energy
+    harmonic3_ratio = harmonic3_energy / total_energy
+    
+    # Vibration sound has:
+    # - High energy in 40-50Hz range (>30% of total energy)
+    # - Significant harmonic energy (>10% in second harmonic, >5% in third)
+    # - Low energy above 200Hz (most energy concentrated in low frequencies)
+    high_freq_mask = freqs > 200
+    high_freq_energy = np.sum(magnitude[high_freq_mask, :])
+    high_freq_ratio = high_freq_energy / total_energy
+    
+    is_vibration = (
+        vibration_ratio > 0.30 and  # Strong fundamental frequency
+        harmonic2_ratio > 0.10 and  # Strong second harmonic
+        harmonic3_ratio > 0.05 and  # Some third harmonic
+        high_freq_ratio < 0.30  # Low energy in high frequencies (speech has more)
+    )
+    
+    return is_vibration
+
+
 def calculate_rms(audio_chunk):
     """Calculate RMS for VAD"""
     audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
@@ -207,6 +262,11 @@ try:
 
             # Downsample for wake word detection
             audio_16k = downsample_for_detection(np.array(list(pre_buffer)))
+
+            # Skip if this is the vibration sound playing
+            if is_vibration_sound(audio_16k):
+                CONFIDENCE_SMOOTHING_WINDOW.clear()  # Reset smoothing on vibration sound
+                continue
 
             # Extract features and run detection
             features = extract_features(audio_16k)
