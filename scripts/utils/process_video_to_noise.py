@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Extract negative samples from an audio/video file
-Automatically segments and saves to training_data/negative/
+Process MP4 videos and extract audio segments to training_data/noise/
+Use this for background noise, music, or any non-speech audio
 """
 
 import sys
@@ -10,10 +10,11 @@ import numpy as np
 import wave
 import subprocess
 import tempfile
+from pathlib import Path
 
 if len(sys.argv) < 2:
-    print("Usage: python3 extract_negative_from_file.py <audio_or_video_file>")
-    print("Example: python3 extract_negative_from_file.py podcast.mp4")
+    print("Usage: python3 process_video_to_noise.py <video_file>")
+    print("Example: python3 process_video_to_noise.py background_music.mp4")
     sys.exit(1)
 
 input_file = sys.argv[1]
@@ -22,21 +23,27 @@ if not os.path.exists(input_file):
     print(f"❌ File not found: {input_file}")
     sys.exit(1)
 
-print("🎵 Extracting Negative Samples from File")
+print("🎵 Processing Video to Noise Dataset")
 print("=" * 50)
 print(f"📁 Input: {input_file}")
 
-# Create negative samples directory
-os.makedirs("training_data/negative", exist_ok=True)
+# Create noise samples directory
+os.makedirs("training_data/noise", exist_ok=True)
 
 # Get next file number
 def get_next_file_number():
-    files = os.listdir("training_data/negative")
-    jarvis_files = [f for f in files if f.startswith("negative_") and f.endswith(".wav")]
-    if not jarvis_files:
+    files = os.listdir("training_data/noise")
+    noise_files = [f for f in files if f.startswith("noise_") and f.endswith(".wav")]
+    if not noise_files:
         return 1
-    numbers = [int(f.split("_")[1].split(".")[0]) for f in jarvis_files]
-    return max(numbers) + 1
+    numbers = []
+    for f in noise_files:
+        try:
+            num = int(f.split("_")[1].split(".")[0])
+            numbers.append(num)
+        except (ValueError, IndexError):
+            continue
+    return max(numbers) + 1 if numbers else 1
 
 file_num = get_next_file_number()
 
@@ -89,7 +96,7 @@ try:
                 continue
 
             # Save segment
-            filename = f"training_data/negative/negative_{file_num:04d}.wav"
+            filename = f"training_data/noise/noise_{file_num}.wav"
             with wave.open(filename, 'wb') as out_wf:
                 out_wf.setnchannels(n_channels)
                 out_wf.setsampwidth(sample_width)
@@ -105,7 +112,9 @@ try:
     print(f"\n✅ Extraction complete!")
     print(f"   Saved: {segments_saved} segments")
     print(f"   Skipped: {segments_skipped} silent segments")
-    print(f"\n💡 Next step: bun run train")
+    print(f"   Files: noise_{get_next_file_number() - segments_saved}.wav to noise_{file_num - 1}.wav")
+    print(f"\n💡 Next step: Retrain the model with:")
+    print(f"   uvx --with tensorflow --with librosa python3 scripts/training/2_train_model.py")
 
 finally:
     # Clean up temp file

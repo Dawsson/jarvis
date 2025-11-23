@@ -15,13 +15,15 @@ print("=" * 50)
 
 # Load model and metadata
 print("\n📦 Loading model...")
-model = tf.keras.models.load_model("jarvis_model/model.h5")
+# Load without compiling - we don't need the loss function for inference
+model = tf.keras.models.load_model("jarvis_model/model.h5", compile=False)
 
 with open("jarvis_model/metadata.json", "r") as f:
     metadata = json.load(f)
 
 MAX_FRAMES = metadata["max_frames"]
 N_MFCC = metadata["n_mfcc"]
+USE_DELTAS = metadata.get("use_deltas", False)
 SAMPLE_RATE = metadata["sample_rate"]
 
 print(f"✅ Model loaded")
@@ -31,7 +33,7 @@ print(f"\n🎙️  Say 'Jarvis' to test detection...\n")
 # Audio parameters
 CHUNK = 1024
 CHANNELS = 1
-BUFFER_DURATION = 0.8  # seconds - fast detection for quick "Jarvis"
+BUFFER_DURATION = 1.0  # seconds - increased from 0.8 for better detection
 buffer_size = int(SAMPLE_RATE * BUFFER_DURATION)
 
 # Audio buffer
@@ -69,7 +71,7 @@ def is_silent(audio_data, threshold=0.01):
     return rms < threshold
 
 def extract_features(audio_data):
-    """Extract MFCC from audio buffer"""
+    """Extract MFCC with deltas from audio buffer"""
     # Convert to float32
     audio = np.array(audio_data, dtype=np.float32) / 32768.0
 
@@ -80,6 +82,12 @@ def extract_features(audio_data):
         n_mfcc=N_MFCC,
         hop_length=256
     )
+
+    if USE_DELTAS:
+        # Add delta and delta-delta features to match training
+        delta = librosa.feature.delta(mfcc)
+        delta2 = librosa.feature.delta(mfcc, order=2)
+        mfcc = np.vstack([mfcc, delta, delta2])
 
     # Pad or truncate
     if mfcc.shape[1] < MAX_FRAMES:
@@ -122,10 +130,11 @@ try:
             # Predict
             prediction = model.predict(features, verbose=0)[0][0]
 
-            if prediction > 0.8:
+            # Adjusted thresholds - lower to be more sensitive
+            if prediction > 0.75:
                 print(f"🎯 JARVIS DETECTED! (confidence: {prediction*100:.1f}%)")
                 cooldown_frames = 10  # ~1 second cooldown after detection
-            elif prediction > 0.7:
+            elif prediction > 0.65:
                 print(f"   Maybe... (confidence: {prediction*100:.1f}%)")
 
 except KeyboardInterrupt:

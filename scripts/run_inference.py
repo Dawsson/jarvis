@@ -12,7 +12,8 @@ from collections import deque
 import sys
 
 # Load model
-model = tf.keras.models.load_model("jarvis_model/model.h5")
+# Load without compiling - we don't need the loss function for inference
+model = tf.keras.models.load_model("jarvis_model/model.h5", compile=False)
 
 with open("jarvis_model/metadata.json", "r") as f:
     metadata = json.load(f)

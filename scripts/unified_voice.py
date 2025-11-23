@@ -16,13 +16,15 @@ import threading
 import select
 
 # Load wake word model
-model = tf.keras.models.load_model("jarvis_model/model.h5")
+# Load without compiling - we don't need the loss function for inference
+model = tf.keras.models.load_model("jarvis_model/model.h5", compile=False)
 
 with open("jarvis_model/metadata.json", "r") as f:
     metadata = json.load(f)
 
 MAX_FRAMES = metadata["max_frames"]
 N_MFCC = metadata["n_mfcc"]
+USE_DELTAS = metadata.get("use_deltas", False)
 
 # Audio configuration
 RATE = 48000  # High quality for recording
@@ -40,9 +42,9 @@ SILENCE_THRESHOLD = 150
 SILENCE_CHUNKS_THRESHOLD = int((SILENCE_DURATION * RATE) / CHUNK)
 
 # Wake word detection settings
-DETECTION_THRESHOLD = 0.80  # Base threshold for detection
-HIGH_CONFIDENCE_THRESHOLD = 0.90  # Very high confidence triggers immediately
-MEDIUM_CONFIDENCE_THRESHOLD = 0.80  # Medium confidence requires consecutive detections
+DETECTION_THRESHOLD = 0.75  # Base threshold for detection (lowered from 0.80)
+HIGH_CONFIDENCE_THRESHOLD = 0.85  # Very high confidence triggers immediately
+MEDIUM_CONFIDENCE_THRESHOLD = 0.75  # Medium confidence requires consecutive detections
 CONSECUTIVE_DETECTIONS_REQUIRED = 2  # Require 2 consecutive detections for medium confidence
 CONFIDENCE_SMOOTHING_WINDOW = deque(maxlen=CONSECUTIVE_DETECTIONS_REQUIRED)
 
@@ -90,8 +92,14 @@ def downsample_for_detection(audio_48k):
 
 
 def extract_features(audio_16k):
-    """Extract MFCC features for wake word detection"""
+    """Extract MFCC features with deltas for wake word detection"""
     mfcc = librosa.feature.mfcc(y=audio_16k, sr=16000, n_mfcc=N_MFCC, hop_length=256)
+
+    if USE_DELTAS:
+        # Add delta and delta-delta features to match training
+        delta = librosa.feature.delta(mfcc)
+        delta2 = librosa.feature.delta(mfcc, order=2)
+        mfcc = np.vstack([mfcc, delta, delta2])
 
     if mfcc.shape[1] < MAX_FRAMES:
         pad_width = MAX_FRAMES - mfcc.shape[1]
