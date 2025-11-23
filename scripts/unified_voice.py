@@ -39,6 +39,13 @@ pre_buffer = deque(maxlen=pre_buffer_size)
 SILENCE_THRESHOLD = 150
 SILENCE_CHUNKS_THRESHOLD = int((SILENCE_DURATION * RATE) / CHUNK)
 
+# Wake word detection settings
+DETECTION_THRESHOLD = 0.80  # Base threshold for detection
+HIGH_CONFIDENCE_THRESHOLD = 0.90  # Very high confidence triggers immediately
+MEDIUM_CONFIDENCE_THRESHOLD = 0.80  # Medium confidence requires consecutive detections
+CONSECUTIVE_DETECTIONS_REQUIRED = 2  # Require 2 consecutive detections for medium confidence
+CONFIDENCE_SMOOTHING_WINDOW = deque(maxlen=CONSECUTIVE_DETECTIONS_REQUIRED)
+
 # Get microphone index
 mic_index = int(sys.argv[1]) if len(sys.argv) > 1 else None
 
@@ -195,6 +202,7 @@ try:
 
             # Skip if too quiet
             if is_silent(list(pre_buffer)):
+                CONFIDENCE_SMOOTHING_WINDOW.clear()  # Reset smoothing on silence
                 continue
 
             # Downsample for wake word detection
@@ -205,16 +213,34 @@ try:
             features = np.expand_dims(features, axis=0)
             prediction = model.predict(features, verbose=0)[0][0]
 
-            if prediction > 0.8:
-                print(f"DETECTED:{prediction:.3f}", flush=True)
-                cooldown_frames = 10  # Cooldown after detection
-
-                # Start recording (includes pre-buffer)
+            # Very high confidence triggers immediately (likely real "Jarvis")
+            if prediction >= HIGH_CONFIDENCE_THRESHOLD:
+                print(f"DETECTED:{prediction:.3f} (high confidence)", flush=True)
+                cooldown_frames = 10
                 record_command()
-
-                # Reset for next detection
                 pre_buffer.clear()
                 frame_count = 0
+                CONFIDENCE_SMOOTHING_WINDOW.clear()
+            
+            # Medium confidence requires consecutive detections (reduces false positives)
+            elif prediction >= MEDIUM_CONFIDENCE_THRESHOLD:
+                CONFIDENCE_SMOOTHING_WINDOW.append(prediction)
+                
+                if len(CONFIDENCE_SMOOTHING_WINDOW) >= CONSECUTIVE_DETECTIONS_REQUIRED:
+                    avg_confidence = np.mean(list(CONFIDENCE_SMOOTHING_WINDOW))
+                    
+                    # Only trigger if average is still above medium threshold
+                    if avg_confidence >= MEDIUM_CONFIDENCE_THRESHOLD:
+                        print(f"DETECTED:{avg_confidence:.3f} (consecutive)", flush=True)
+                        cooldown_frames = 10
+                        record_command()
+                        pre_buffer.clear()
+                        frame_count = 0
+                        CONFIDENCE_SMOOTHING_WINDOW.clear()
+            
+            # Low confidence - reset smoothing window
+            else:
+                CONFIDENCE_SMOOTHING_WINDOW.clear()
 
 except KeyboardInterrupt:
     pass

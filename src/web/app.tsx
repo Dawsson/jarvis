@@ -3,40 +3,159 @@ import { createRoot } from "react-dom/client";
 import type { ServerMessage, JarvisState } from "../types/websocket";
 import type { JarvisStatus } from "../jarvis-engine";
 
+// --- Types ---
+interface Reminder {
+  id: string;
+  text: string;
+  scheduledTime: string;
+}
+
+interface Todo {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
+interface SystemStats {
+  cpu: number;
+  memory: number;
+  uptime: number;
+}
+
+// --- Components ---
+
+// 1. Large Complex Reactor (Arc Style)
+const Reactor = ({ status, confidence }: { status: JarvisStatus, confidence: number }) => {
+  const isIdle = status === "idle";
+  
+  // Only animate for high energy states (Processing, Recording, Wake Word)
+  const isHighEnergy = status === "processing" || status === "recording" || status === "wake-word-detected";
+  
+  // Colors (Blue/Neutral)
+  const baseColor = "#444";
+  const activeColor = "#00d9ff"; 
+  const recordColor = "#ff4444";
+  const wakeColor = "#fff";
+  const listeningColor = "#888"; // Neutral for active listening
+
+  const primaryColor = status === "recording" ? recordColor 
+    : status === "wake-word-detected" ? wakeColor
+    : status === "listening" ? listeningColor
+    : isIdle ? baseColor 
+    : activeColor;
+
+  return (
+    <div style={{ position: "relative", width: 450, height: 450, display: "flex", justifyContent: "center", alignItems: "center" }}>
+      
+      {/* Core Glow - Only active in high energy */}
+      <div style={{
+        position: "absolute", width: "120px", height: "120px", borderRadius: "50%",
+        background: primaryColor, opacity: isHighEnergy ? 0.4 : 0.05, filter: "blur(30px)",
+        transition: "all 0.5s ease",
+        animation: isHighEnergy ? "pulse 2s ease-in-out infinite" : "none"
+      }} />
+
+      {/* Core Solid Ring - Static */}
+      <svg width="100%" height="100%" style={{ position: "absolute", opacity: 0.8, transition: "all 0.3s ease" }}>
+          <circle cx="225" cy="225" r="70" fill="none" stroke={primaryColor} strokeWidth="4" opacity={isHighEnergy ? 0.9 : 0.2} />
+          <circle cx="225" cy="225" r="60" fill="none" stroke={primaryColor} strokeWidth="1" opacity={0.5} />
+      </svg>
+
+      {/* Inner Rotating Dashes - Spin only on High Energy */}
+      <svg width="100%" height="100%" style={{ position: "absolute", animation: isHighEnergy ? "spin 4s linear infinite" : "none" }}>
+         <circle cx="225" cy="225" r="90" fill="none" stroke={primaryColor} strokeWidth="8" strokeDasharray="20 40" opacity={isHighEnergy ? 0.6 : 0.1} />
+      </svg>
+      
+      {/* Middle Geometric Ring - Spin only on High Energy */}
+      <svg width="100%" height="100%" style={{ position: "absolute", animation: isHighEnergy ? "spin 10s linear infinite reverse" : "none" }}>
+         <circle cx="225" cy="225" r="120" fill="none" stroke={primaryColor} strokeWidth="1" opacity={0.3} />
+         <path d="M225 95 L230 105 L220 105 Z" fill={primaryColor} />
+         <path d="M225 355 L230 345 L220 345 Z" fill={primaryColor} />
+         <path d="M95 225 L105 230 L105 220 Z" fill={primaryColor} />
+         <path d="M355 225 L345 230 L345 220 Z" fill={primaryColor} />
+      </svg>
+
+      {/* Segmented Ring - Spin only on High Energy */}
+      <svg width="100%" height="100%" style={{ position: "absolute", animation: isHighEnergy ? "spin 30s linear infinite" : "none" }}>
+         <circle cx="225" cy="225" r="160" fill="none" stroke={primaryColor} strokeWidth="20" strokeDasharray="2 10" opacity={isHighEnergy ? 0.15 : 0.05} />
+         <circle cx="225" cy="225" r="180" fill="none" stroke={primaryColor} strokeWidth="1" strokeDasharray="40 40" opacity={0.2} />
+      </svg>
+
+      {/* Outer Scale - Static */}
+      <svg width="100%" height="100%" style={{ position: "absolute" }}>
+         {Array.from({ length: 60 }).map((_, i) => (
+           <line
+             key={i}
+             x1="225" y1="20"
+             x2="225" y2={i % 5 === 0 ? "40" : "30"}
+             stroke={primaryColor}
+             strokeWidth={i % 5 === 0 ? 2 : 1}
+             transform={`rotate(${i * 6} 225 225)`}
+             opacity={isHighEnergy ? (i % 5 === 0 ? 0.5 : 0.2) : 0.1}
+           />
+        ))}
+      </svg>
+
+      {/* Center Status Text */}
+      <div style={{ zIndex: 10, textAlign: "center", color: primaryColor, transition: "color 0.3s ease", textShadow: `0 0 10px ${primaryColor}` }}>
+         <div style={{ fontSize: "14px", letterSpacing: "3px", fontWeight: "bold" }}>
+            {status === "idle" ? "STANDBY" : status.toUpperCase().replace(/-/g, " ")}
+         </div>
+         {confidence > 0 && isHighEnergy && (
+             <div style={{ fontSize: "11px", marginTop: "6px", opacity: 0.8, fontFamily: "monospace" }}>CONF: {(confidence * 100).toFixed(0)}%</div>
+         )}
+      </div>
+    </div>
+  );
+};
+
+// 2. Stat Display (Compact)
+const StatDisplay = ({ label, value, unit = "" }: { label: string, value: string | number, unit?: string }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+    <div style={{ fontSize: "9px", color: "#666", letterSpacing: "1px" }}>{label}</div>
+    <div style={{ fontSize: "12px", color: "#aaa", fontFamily: "monospace" }}>{value}{unit}</div>
+  </div>
+);
+
 function App() {
-  const [wsUrl, setWsUrl] = useState(() => {
-    const saved = localStorage.getItem("jarvis-ws-url");
-    return saved || `ws://${window.location.host}/ws`;
-  });
+  // State
+  const [wsUrl] = useState(() => localStorage.getItem("jarvis-ws-url") || `ws://${window.location.host}/ws`);
   const [status, setStatus] = useState<JarvisStatus>("idle");
   const [logs, setLogs] = useState<Array<{ timestamp: string; message: string }>>([]);
   const [transcription, setTranscription] = useState("");
   const [response, setResponse] = useState("");
   const [confidence, setConfidence] = useState(0);
   const [currentProject, setCurrentProject] = useState<string | null>(null);
-  const [activeTodos, setActiveTodos] = useState<any[]>([]);
-  const [wakeWordAnimation, setWakeWordAnimation] = useState(false);
+  const [activeTodos, setActiveTodos] = useState<Todo[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [systemStats, setSystemStats] = useState<SystemStats>({ cpu: 0, memory: 0, uptime: 0 });
   const [isConnected, setIsConnected] = useState(false);
   const [microphones, setMicrophones] = useState<Array<{ index: number; name: string }>>([]);
   const [selectedMic, setSelectedMic] = useState<number | null>(null);
   const [showMicSelector, setShowMicSelector] = useState(false);
+  const [time, setTime] = useState(new Date());
 
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fullscreen toggle
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch((err) => {
-        console.error("Error attempting to enable fullscreen:", err);
-      });
-    } else {
-      document.exitFullscreen();
-    }
-  };
-
-  // Keyboard shortcut for fullscreen (F key)
+  // Time Update
   useEffect(() => {
+     const t = setInterval(() => setTime(new Date()), 1000);
+     return () => clearInterval(t);
+  }, []);
+
+  // Fullscreen toggle (F key)
+  useEffect(() => {
+    const toggleFullscreen = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch((err) => {
+          console.error("Error attempting to enable fullscreen:", err);
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    };
+
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.key === 'f' || e.key === 'F') {
         toggleFullscreen();
@@ -49,18 +168,13 @@ function App() {
     };
   }, []);
 
-  // Load initial state from API
+  // Initial Load
   useEffect(() => {
     const loadState = async () => {
       try {
         const url = wsUrl.replace("ws://", "http://").replace("wss://", "https://").replace("/ws", "");
-        const [stateResponse, micsResponse] = await Promise.all([
-          fetch(`${url}/api/state`),
-          fetch(`${url}/api/microphones`),
-        ]);
-        const state: JarvisState = await stateResponse.json();
-        const mics = await micsResponse.json();
-
+        const [stateRes, micsRes] = await Promise.all([fetch(`${url}/api/state`), fetch(`${url}/api/microphones`)]);
+        const state: JarvisState = await stateRes.json();
         setStatus(state.status);
         setLogs(state.logs);
         setTranscription(state.transcription);
@@ -68,375 +182,219 @@ function App() {
         setConfidence(state.confidence);
         setCurrentProject(state.currentProject);
         setActiveTodos(state.activeTodos);
-        setMicrophones(mics);
-      } catch (error) {
-        console.error("Failed to load initial state:", error);
+        if (state.reminders) setReminders(state.reminders);
+        setMicrophones(await micsRes.json());
+      } catch (err) {
+        console.error("Failed to load state", err);
       }
     };
     loadState();
   }, [wsUrl]);
 
-  // WebSocket connection
+  // WebSocket
   useEffect(() => {
     const connect = () => {
-      try {
-        ws.current = new WebSocket(wsUrl);
-
-        ws.current.onopen = () => {
-          console.log("WebSocket connected");
-          setIsConnected(true);
-          // Clear any pending reconnect timeout since we're connected
-          if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-            reconnectTimeoutRef.current = null;
-          }
-        };
-
-        ws.current.onmessage = (event) => {
-          const message: ServerMessage = JSON.parse(event.data);
-
-          if (message.type === "jarvis-event") {
-            const jarvisEvent = message.event;
-
-            if (jarvisEvent.type === "status") {
-              setStatus(jarvisEvent.data);
-            } else if (jarvisEvent.type === "wake-word") {
-              const conf = jarvisEvent.data.confidence;
-              setConfidence(conf);
-              setWakeWordAnimation(true);
-              setTimeout(() => setWakeWordAnimation(false), 1500);
-
-              // Play sound
-              const audio = new Audio("/System/Library/Sounds/Glass.aiff");
-              audio.play().catch(() => {
-                 // Silent fail
-              });
-
-            } else if (jarvisEvent.type === "transcription") {
-              setTranscription(jarvisEvent.data);
-            } else if (jarvisEvent.type === "response") {
-              setResponse(jarvisEvent.data);
-            } else if (jarvisEvent.type === "log") {
-              setLogs((prev) => [
-                ...prev.slice(-99),
-                { timestamp: new Date().toISOString(), message: jarvisEvent.data },
-              ]);
-            } else if (jarvisEvent.type === "error") {
-              setLogs((prev) => [
-                ...prev.slice(-99),
-                { timestamp: new Date().toISOString(), message: `ERR: ${jarvisEvent.data}` },
-              ]);
-            }
-          } else if (message.type === "project-update") {
-            setCurrentProject(message.data.currentProject);
-            setActiveTodos(message.data.activeTodos);
-          }
-        };
-
-        ws.current.onclose = () => {
-          console.log("WebSocket disconnected");
-          setIsConnected(false);
-          // Retry connection after 5 seconds
-          reconnectTimeoutRef.current = setTimeout(connect, 5000);
-        };
-
-        ws.current.onerror = (error) => {
-          console.error("WebSocket error:", error);
-        };
-      } catch (error) {
-        console.error("Failed to create WebSocket:", error);
-        // Retry connection after 5 seconds
-        reconnectTimeoutRef.current = setTimeout(connect, 5000);
-      }
+      ws.current = new WebSocket(wsUrl);
+      ws.current.onopen = () => { setIsConnected(true); if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current); };
+      ws.current.onclose = () => { setIsConnected(false); reconnectTimeoutRef.current = setTimeout(connect, 5000); };
+      ws.current.onmessage = (e) => {
+        const msg: ServerMessage = JSON.parse(e.data);
+        if (msg.type === "jarvis-event") {
+          const evt = msg.event;
+          if (evt.type === "status") setStatus(evt.data);
+          else if (evt.type === "wake-word") setConfidence(evt.data.confidence);
+          else if (evt.type === "transcription") setTranscription(evt.data);
+          else if (evt.type === "response") setResponse(evt.data);
+          else if (evt.type === "log") setLogs(p => [...p.slice(-99), { timestamp: new Date().toISOString(), message: evt.data }]);
+        } else if (msg.type === "project-update") {
+          setCurrentProject(msg.data.currentProject);
+          setActiveTodos(msg.data.activeTodos);
+        } else if (msg.type === "reminders-update") {
+            setReminders(msg.data.reminders);
+        } else if (msg.type === "system-stats") {
+            setSystemStats(msg.data);
+        }
+      };
     };
-
     connect();
-
-    return () => {
-      // Clear any pending reconnect timeout
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      // Close WebSocket connection
-      ws.current?.close();
-    };
+    return () => ws.current?.close();
   }, [wsUrl]);
 
   const handleMicChange = (micIndex: number | null) => {
-    setSelectedMic(micIndex);
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(
-        JSON.stringify({
-          type: "change-microphone",
-          microphoneIndex: micIndex,
-        })
-      );
-    }
-    setShowMicSelector(false);
+      setSelectedMic(micIndex);
+      ws.current?.send(JSON.stringify({ type: "change-microphone", microphoneIndex: micIndex }));
+      setShowMicSelector(false);
   };
 
-  // Status Logic
-  const isActive = status === "listening" || status === "recording";
-  const isWake = status === "wake-word-detected" || wakeWordAnimation;
-  const isProcessing = status === "processing";
-  const hasError = status === "error";
-  
-  // Theme configuration (Neutral/Black/White)
+  const formatUptime = (sec: number) => {
+     const h = Math.floor(sec / 3600);
+     const m = Math.floor((sec % 3600) / 60);
+     return `${h}h ${m}m`;
+  };
+
+  // Theme Colors
   const theme = {
-    bg: "#080808", // Deep black
-    fg: "#Eaeaea", // Off-white
-    dim: "#555555", // Grey
-    accent: "#FFFFFF", // White for active states
-    active: isWake ? "#FFFFFF" : isActive ? "#D0D0D0" : "#444444",
-    border: "#222222"
+    bg: "#050505",
+    fg: "#Eaeaea",
+    dim: "#555",
+    accent: "#00d9ff",
+    warn: "#ff4444",
+    success: "#00ff88"
   };
 
   return (
-    <div
-      style={{
-        width: "100vw",
-        height: "100vh",
-        position: "relative",
-        background: theme.bg,
-        color: theme.fg,
-        fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
-        overflow: "hidden",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
-      {/* Ambient Background */}
-      <div 
-        style={{
-          position: "absolute",
-          inset: 0,
-          backgroundImage: `
-            radial-gradient(circle at 50% 50%, #151515 0%, transparent 70%)
-          `,
-          pointerEvents: "none",
-        }} 
-      />
+    <div style={{
+      width: "100vw", height: "100vh", overflow: "hidden",
+      background: theme.bg, color: theme.fg,
+      fontFamily: "'Share Tech Mono', monospace",
+      position: "relative",
+      display: "flex", justifyContent: "center", alignItems: "center"
+    }}>
+      
+      {/* Top Header - Previous Style */}
+      <div style={{
+          position: "absolute", top: 40, left: 40, right: 40,
+          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+          zIndex: 10
+      }}>
+         {/* Left: Title & Status */}
+         <div>
+            <div style={{ fontSize: "32px", fontWeight: "bold", letterSpacing: "8px", color: "#fff", marginBottom: "4px" }}>JARVIS</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", letterSpacing: "2px", color: isConnected ? theme.success : theme.warn }}>
+               <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: isConnected ? theme.success : theme.warn }} />
+               {isConnected ? "SYSTEM ONLINE" : "OFFLINE"}
+            </div>
+         </div>
 
-      {/* Central Reactor/Eye */}
-      <div style={{ position: "relative", width: "240px", height: "240px", display: "flex", justifyContent: "center", alignItems: "center" }}>
-        {/* Outer Static Ring */}
-        <div
-          style={{
-            position: "absolute",
-            width: "100%",
-            height: "100%",
-            border: `1px solid ${theme.dim}`,
-            borderRadius: "50%",
-            opacity: 0.3,
-          }}
-        />
-        
-        {/* Processing Ring (Rotates) */}
-        <div
-          style={{
-            position: "absolute",
-            width: "90%",
-            height: "90%",
-            border: `1px dashed ${isProcessing ? theme.accent : theme.dim}`,
-            borderRadius: "50%",
-            animation: isProcessing ? "spin 3s linear infinite" : "none",
-            opacity: isProcessing ? 0.8 : 0.2,
-            transition: "opacity 0.3s ease, border-color 0.3s ease",
-          }}
-        />
-
-        {/* Core (Pulses) */}
-        <div
-          style={{
-            width: isWake ? "40%" : isActive ? "35%" : "20%",
-            height: isWake ? "40%" : isActive ? "35%" : "20%",
-            background: hasError ? "#330000" : theme.active,
-            borderRadius: "50%",
-            boxShadow: isWake 
-              ? `0 0 40px ${theme.accent}` 
-              : isActive 
-                ? `0 0 20px rgba(255,255,255,0.3)` 
-                : "none",
-            transition: "all 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
-            opacity: isWake ? 1 : isActive ? 0.9 : 0.6,
-            border: hasError ? "2px solid red" : "none"
-          }}
-        />
-        
-        {/* Status Label */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: "-40px",
-            fontSize: "11px",
-            letterSpacing: "3px",
-            textTransform: "uppercase",
-            color: theme.dim,
-            fontWeight: 600
-          }}
-        >
-          {status.replace(/-/g, " ")}
-        </div>
+         {/* Right: Time & Mic */}
+         <div style={{ textAlign: "right" }}>
+             <div style={{ fontSize: "24px", color: "#fff", letterSpacing: "2px" }}>
+                {time.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+             </div>
+             <div 
+               onClick={() => setShowMicSelector(!showMicSelector)}
+               style={{ fontSize: "11px", color: theme.dim, letterSpacing: "1px", cursor: "pointer", marginTop: "4px" }}
+             >
+                MIC: {selectedMic !== null ? `IDX ${selectedMic}` : "AUTO"} ▼
+             </div>
+         </div>
       </div>
 
-      {/* Center Overlay Conversation */}
-      {(transcription || response) && (
-        <div
-          style={{
-            position: "absolute",
-            top: "15%",
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "600px",
-            maxWidth: "90%",
-            textAlign: "center",
-            zIndex: 10,
-            display: "flex",
-            flexDirection: "column",
-            gap: "24px"
-          }}
-        >
-          {transcription && (
-            <div style={{ animation: "fadeIn 0.5s ease" }}>
-              <div style={{ fontSize: "10px", color: theme.dim, marginBottom: "6px", letterSpacing: "2px" }}>INPUT</div>
-              <div style={{ fontSize: "18px", color: theme.fg, fontWeight: "300", lineHeight: "1.4" }}>"{transcription}"</div>
-            </div>
-          )}
-          
-          {response && (
-            <div style={{ animation: "fadeIn 0.6s ease 0.2s backwards" }}>
-              <div style={{ fontSize: "10px", color: theme.dim, marginBottom: "6px", letterSpacing: "2px" }}>OUTPUT</div>
-              <div style={{ fontSize: "16px", color: theme.accent, lineHeight: "1.6", whiteSpace: "pre-wrap" }}>
-                {response}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Bottom Left: System & Logs */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: "40px",
-          left: "40px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px",
-          width: "300px",
-        }}
-      >
-        {/* System Status */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-           <div style={{ fontSize: "9px", color: theme.dim, letterSpacing: "1px", textTransform: "uppercase" }}>SYSTEM STATUS</div>
-           <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: theme.fg }}>
-             <div style={{ width: "6px", height: "6px", background: isConnected ? theme.fg : theme.dim, borderRadius: "50%" }} />
-             {isConnected ? "ONLINE" : "OFFLINE"} • CONF: {Math.round(confidence * 100)}%
-           </div>
-           <div 
-             onClick={() => setShowMicSelector(!showMicSelector)}
-             style={{ fontSize: "11px", color: theme.dim, cursor: "pointer", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" }}
-           >
-             MIC: {selectedMic !== null ? `idx:${selectedMic}` : "AUTO"} 
-             <span style={{ fontSize: "8px" }}>▼</span>
-           </div>
-        </div>
-
-        {/* Mini Log */}
-        <div style={{  display: "flex", flexDirection: "column", gap: "4px", opacity: 0.6 }}>
-           <div style={{ fontSize: "9px", color: theme.dim, letterSpacing: "1px", textTransform: "uppercase" }}>RECENT LOGS</div>
-           <div style={{ fontSize: "10px", color: theme.dim, fontFamily: "monospace", display: "flex", flexDirection: "column", gap: "2px" }}>
-             {logs.slice(-3).map((l, i) => (
-               <div key={i} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                 <span style={{ color: "#333" }}>{l.timestamp.split('T')[1].split('.')[0]}</span> {l.message}
-               </div>
-             ))}
-           </div>
-        </div>
-      </div>
-
-      {/* Bottom Right: Project */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: "40px",
-          right: "40px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px",
-          width: "300px",
-          alignItems: "flex-end",
-          textAlign: "right"
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-end" }}>
-           <div style={{ fontSize: "9px", color: theme.dim, letterSpacing: "1px", textTransform: "uppercase" }}>ACTIVE PROTOCOL</div>
-           {currentProject ? (
-             <>
-               <div style={{ fontSize: "13px", color: theme.fg, fontWeight: 500 }}>{currentProject.toUpperCase()}</div>
-               <div style={{ fontSize: "11px", color: theme.dim }}>{activeTodos.length} PENDING OBJECTIVES</div>
-               {activeTodos.slice(0, 2).map((todo, i) => (
-                 <div key={i} style={{ fontSize: "10px", color: theme.dim, marginTop: "2px", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                   • {todo.text}
+      {/* Center: Reactor & Conversation */}
+      <div style={{ position: "relative", zIndex: 5, display: "flex", flexDirection: "column", alignItems: "center", gap: "40px" }}>
+         <Reactor status={status} confidence={confidence} />
+         
+         {/* Conversation Overlay */}
+         <div style={{ textAlign: "center", maxWidth: "700px", minHeight: "100px" }}>
+             {transcription && (
+                 <div style={{ fontSize: "14px", color: "#888", marginBottom: "12px", fontStyle: "italic" }}>"{transcription}"</div>
+             )}
+             {response && (
+                 <div style={{ fontSize: "22px", color: "#ffffff", lineHeight: "1.6", textShadow: "0 0 15px rgba(255, 255, 255, 0.2)", fontWeight: "300" }}>
+                     {response}
                  </div>
-               ))}
-             </>
-           ) : (
-             <div style={{ fontSize: "11px", color: theme.dim }}>NO ACTIVE PROTOCOL</div>
-           )}
-        </div>
+             )}
+         </div>
       </div>
 
-      {/* Mic Selector Modal */}
-      {showMicSelector && (
-        <div
-           style={{
-             position: "absolute",
-             bottom: "100px",
-             left: "40px",
-             background: "#111",
-             border: "1px solid #333",
-             padding: "8px",
-             borderRadius: "4px",
-             zIndex: 50,
-             width: "200px"
-           }}
-        >
-          <div 
-            onClick={() => handleMicChange(null)}
-            style={{ padding: "6px", fontSize: "11px", color: selectedMic === null ? "#fff" : "#666", cursor: "pointer" }}
-          >
-            System Default {selectedMic === null && "✓"}
+      {/* Bottom Left: Logs & Stats (Combined) */}
+      <div style={{
+          position: "absolute", bottom: 40, left: 40, width: "350px",
+          display: "flex", flexDirection: "column", gap: "20px", zIndex: 10
+      }}>
+          {/* System Stats Row */}
+          <div style={{ display: "flex", gap: "20px", borderBottom: "1px solid #222", paddingBottom: "10px" }}>
+             <StatDisplay label="CPU" value={(systemStats.cpu * 100).toFixed(0)} unit="%" />
+             <StatDisplay label="RAM" value={systemStats.memory.toFixed(0)} unit="%" />
+             <StatDisplay label="UPTIME" value={formatUptime(systemStats.uptime)} />
           </div>
-          {microphones.map(mic => (
-            <div 
-              key={mic.index}
-              onClick={() => handleMicChange(mic.index)}
-              style={{ padding: "6px", fontSize: "11px", color: selectedMic === mic.index ? "#fff" : "#666", cursor: "pointer", borderTop: "1px solid #222" }}
-            >
-              {mic.name} {selectedMic === mic.index && "✓"}
+
+          {/* Logs */}
+          <div>
+             <div style={{ fontSize: "10px", color: theme.dim, letterSpacing: "2px", marginBottom: "8px" }}>SYSTEM LOGS</div>
+             <div style={{ 
+                 height: "150px", overflowY: "hidden", 
+                 display: "flex", flexDirection: "column", justifyContent: "flex-end",
+                 fontSize: "11px", fontFamily: "monospace", color: "#888"
+             }}>
+                 {logs.slice(-8).map((log, i) => (
+                    <div key={i} style={{ marginBottom: "4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ color: "#444", marginRight: "6px" }}>{log.timestamp.split("T")[1].split(".")[0]}</span>
+                        <span style={{ color: log.message.includes("ERR") ? theme.warn : "#aaa" }}>{log.message}</span>
+                    </div>
+                 ))}
+             </div>
+          </div>
+      </div>
+
+      {/* Bottom Right: Protocol & Reminders */}
+      <div style={{
+          position: "absolute", bottom: 40, right: 40, width: "300px",
+          display: "flex", flexDirection: "column", gap: "24px", zIndex: 10,
+          textAlign: "right", alignItems: "flex-end"
+      }}>
+          {/* Project */}
+          <div>
+              <div style={{ fontSize: "10px", color: theme.dim, letterSpacing: "2px", marginBottom: "4px" }}>ACTIVE PROTOCOL</div>
+              <div style={{ fontSize: "16px", color: "#fff", fontWeight: "bold" }}>{currentProject || "IDLE"}</div>
+          </div>
+
+          {/* Todos */}
+          <div>
+             <div style={{ fontSize: "10px", color: theme.dim, letterSpacing: "2px", marginBottom: "6px" }}>PENDING OBJECTIVES</div>
+             <div style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "flex-end" }}>
+                 {activeTodos.length === 0 ? <div style={{ fontSize: "11px", color: "#444" }}>-- No active tasks --</div> : null}
+                 {activeTodos.slice(0, 5).map(todo => (
+                     <div key={todo.id} style={{ fontSize: "12px", color: "#ccc" }}>
+                        {todo.text}
+                     </div>
+                 ))}
+                 {activeTodos.length > 5 && <div style={{ fontSize: "10px", color: "#666" }}>+ {activeTodos.length - 5} more</div>}
+             </div>
+          </div>
+
+          {/* Reminders (Only if exists) */}
+          {reminders.length > 0 && (
+              <div>
+                 <div style={{ fontSize: "10px", color: theme.dim, letterSpacing: "2px", marginBottom: "6px" }}>EVENTS</div>
+                 <div style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "flex-end" }}>
+                     {reminders.map(rem => {
+                        const date = new Date(rem.scheduledTime);
+                        const isSoon = date.getTime() - Date.now() < 3600000;
+                         return (
+                             <div key={rem.id} style={{ fontSize: "11px", color: isSoon ? theme.accent : "#888" }}>
+                                <span style={{ marginRight: "6px", opacity: 0.7 }}>{date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                {rem.text}
+                             </div>
+                         );
+                     })}
+                 </div>
+              </div>
+          )}
+      </div>
+
+      {/* Mic Overlay */}
+      {showMicSelector && (
+        <div style={{
+            position: "absolute", top: "80px", right: "40px", width: "220px",
+            background: "#111", border: "1px solid #333", padding: "5px", zIndex: 50
+        }}>
+            <div onClick={() => handleMicChange(null)} style={{ padding: "8px", fontSize: "11px", color: selectedMic === null ? "#fff" : "#888", cursor: "pointer" }}>
+                System Default
             </div>
-          ))}
+            {microphones.map(mic => (
+                <div key={mic.index} onClick={() => handleMicChange(mic.index)} style={{ padding: "8px", fontSize: "11px", color: selectedMic === mic.index ? "#fff" : "#888", cursor: "pointer", borderTop: "1px solid #222" }}>
+                    {mic.name}
+                </div>
+            ))}
         </div>
       )}
 
-      <style>
-        {`
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-          @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-          ::selection {
-            background: rgba(255, 255, 255, 0.2);
-          }
-        `}
-      </style>
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes breathe { 0% { opacity: 0.4; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.05); } 100% { opacity: 0.4; transform: scale(1); } }
+        @keyframes pulse { 0% { opacity: 0.3; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.1); } 100% { opacity: 0.3; transform: scale(1); } }
+      `}</style>
     </div>
   );
 }

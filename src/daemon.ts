@@ -8,6 +8,7 @@ import { listMicrophones } from "./list-microphones";
 import { killExistingInstances } from "./utils/kill-existing";
 import { spawn, type ChildProcess } from "child_process";
 import { join } from "path";
+import * as os from "os";
 
 // Kill any existing instances before starting
 console.log("🔍 Checking for existing instances...");
@@ -25,6 +26,7 @@ let jarvisState: JarvisState = {
   confidence: 0,
   currentProject: null,
   activeTodos: [],
+  reminders: [],
 };
 
 // Initialize Jarvis Engine
@@ -97,6 +99,20 @@ function addLog(message: string) {
   }
 }
 
+// Update reminders data
+async function updateRemindersData() {
+  const activeReminders = await reminders.getActive();
+  jarvisState.reminders = activeReminders;
+
+  // Broadcast updated reminders to all clients
+  broadcast({
+    type: "reminders-update",
+    data: {
+      reminders: jarvisState.reminders
+    }
+  });
+}
+
 // Update project data
 async function updateProjectData() {
   const project = await memory.getCurrentProject();
@@ -158,6 +174,7 @@ jarvis.on("*", async (event: JarvisEvent) => {
 console.log("Starting Jarvis engine...");
 await jarvis.start();
 await updateProjectData();
+await updateRemindersData();
 console.log("Jarvis engine started");
 
 // Start vibration sound if Jarvis is already recording (unlikely on startup, but just in case)
@@ -299,6 +316,36 @@ console.log(`🚀 Jarvis Daemon running at http://localhost:${server.port}`);
 console.log(`📡 WebSocket server ready for connections`);
 console.log(`🎤 Listening for wake word...`);
 
+// System stats checker - runs every 2 seconds
+// Use global to track interval across module reloads
+declare global {
+  var __jarvisStatsInterval: ReturnType<typeof setInterval> | undefined;
+}
+
+function broadcastStats() {
+  const cpuLoad = os.loadavg()[0]; // 1 minute load average
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const memUsage = (usedMem / totalMem) * 100;
+  const uptime = os.uptime();
+
+  broadcast({
+    type: "system-stats",
+    data: {
+      cpu: cpuLoad,
+      memory: memUsage,
+      uptime: uptime
+    }
+  });
+}
+
+if (globalThis.__jarvisStatsInterval) {
+  clearInterval(globalThis.__jarvisStatsInterval);
+}
+globalThis.__jarvisStatsInterval = setInterval(broadcastStats, 2000);
+console.log("📊 System stats monitor started");
+
 // Reminder checker - runs every 5 seconds
 // Use global to track interval across module reloads (for --watch mode)
 declare global {
@@ -329,6 +376,9 @@ async function checkReminders() {
       });
     }
     
+    // Update reminders state for UI
+    await updateRemindersData();
+
     for (const reminder of dueReminders) {
       // Announce reminder via TTS
       const announcement = `Reminder, Sir. ${reminder.text}`;
@@ -377,6 +427,9 @@ process.on("SIGINT", () => {
   console.log("\nShutting down...");
   if (globalThis.__jarvisReminderInterval) {
     clearInterval(globalThis.__jarvisReminderInterval);
+  }
+  if (globalThis.__jarvisStatsInterval) {
+    clearInterval(globalThis.__jarvisStatsInterval);
   }
   stopVibrationSound();
   jarvis.stop();

@@ -5,6 +5,8 @@ export type ServerMessage =
   | { type: "connected"; data: { timestamp: string } }
   | { type: "jarvis-event"; event: JarvisEvent }
   | { type: "project-update"; data: { currentProject: string | null; activeTodos: any[] } }
+  | { type: "reminders-update"; data: { reminders: any[] } }
+  | { type: "system-stats"; data: { cpu: number; memory: number; uptime: number } }
   | { type: "error"; message: string };
 
 // WebSocket message types from client to server
@@ -21,4 +23,6 @@ export interface JarvisState {
   confidence: number;
   currentProject: string | null;
   activeTodos: any[];
+  reminders: any[];
+  systemStats?: { cpu: number; memory: number; uptime: number };
 }
