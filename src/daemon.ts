@@ -6,6 +6,8 @@ import { reminders } from "./memory/reminders";
 import { TextToSpeech } from "./tts";
 import { listMicrophones } from "./list-microphones";
 import { killExistingInstances } from "./utils/kill-existing";
+import { spawn, type ChildProcess } from "child_process";
+import { join } from "path";
 
 // Kill any existing instances before starting
 console.log("🔍 Checking for existing instances...");
@@ -46,8 +48,36 @@ const jarvis = new JarvisEngine({
   groqApiKey: apiKey,
 });
 
-// Initialize TTS for reminder announcements
-const tts = new TextToSpeech(apiKey);
+// Initialize TTS for reminder announcements (use same British voice as Jarvis)
+const tts = new TextToSpeech(apiKey, 'Basil-PlayAI');
+
+// Vibration sound management
+let vibrationSoundProcess: ChildProcess | null = null;
+const vibrationSoundPath = join(process.cwd(), "vibration.wav");
+
+function startVibrationSound() {
+  // Stop any existing vibration sound
+  stopVibrationSound();
+  
+  // Start playing vibration sound in a loop with louder volume (0.6 = 60% volume)
+  // Using a shell loop since afplay doesn't support looping directly
+  vibrationSoundProcess = spawn("sh", [
+    "-c",
+    `while true; do afplay -v 0.6 "${vibrationSoundPath}" 2>/dev/null || break; done`
+  ]);
+  
+  vibrationSoundProcess.on("error", (error) => {
+    console.error("Failed to start vibration sound:", error);
+    vibrationSoundProcess = null;
+  });
+}
+
+function stopVibrationSound() {
+  if (vibrationSoundProcess) {
+    vibrationSoundProcess.kill();
+    vibrationSoundProcess = null;
+  }
+}
 
 // Helper to broadcast to all clients
 function broadcast(message: ServerMessage) {
@@ -88,7 +118,18 @@ async function updateProjectData() {
 jarvis.on("*", async (event: JarvisEvent) => {
   // Update state based on event
   if (event.type === "status") {
-    jarvisState.status = event.data;
+    const newStatus = event.data;
+    const oldStatus = jarvisState.status;
+    jarvisState.status = newStatus;
+    
+    // Manage vibration sound based on status - only play when recording (after wake word)
+    if (newStatus === "recording" && oldStatus !== "recording") {
+      // Started recording - play vibration sound
+      startVibrationSound();
+    } else if (newStatus !== "recording" && oldStatus === "recording") {
+      // Stopped recording - stop vibration sound
+      stopVibrationSound();
+    }
   } else if (event.type === "wake-word") {
     const confidence = event.data.confidence;
     jarvisState.confidence = confidence;
@@ -118,6 +159,11 @@ console.log("Starting Jarvis engine...");
 await jarvis.start();
 await updateProjectData();
 console.log("Jarvis engine started");
+
+// Start vibration sound if Jarvis is already recording (unlikely on startup, but just in case)
+if (jarvisState.status === "recording") {
+  startVibrationSound();
+}
 
 // Bundle the frontend
 console.log("Building frontend...");
@@ -253,12 +299,35 @@ console.log(`🚀 Jarvis Daemon running at http://localhost:${server.port}`);
 console.log(`📡 WebSocket server ready for connections`);
 console.log(`🎤 Listening for wake word...`);
 
-// Reminder checker - runs every minute
-let reminderCheckInterval: ReturnType<typeof setInterval> | null = null;
+// Reminder checker - runs every 5 seconds
+// Use global to track interval across module reloads (for --watch mode)
+declare global {
+  var __jarvisReminderInterval: ReturnType<typeof setInterval> | undefined;
+}
 
 async function checkReminders() {
   try {
+    const now = new Date();
+    // Get fresh reminders from file
     const dueReminders = await reminders.getDue();
+    const allReminders = await reminders.getAll();
+    
+    // Debug logging
+    if (allReminders.length > 0) {
+      const localTime = now.toLocaleString();
+      const localTimeISO = now.toISOString();
+      console.log(`[Reminder Check] Current local time: ${localTime} (UTC: ${localTimeISO})`);
+      console.log(`[Reminder Check] Found ${allReminders.length} total reminders, ${dueReminders.length} due`);
+      allReminders.forEach((r: any) => {
+        const scheduled = new Date(r.scheduledTime);
+        const scheduledLocal = scheduled.toLocaleString();
+        const isPast = scheduled <= now;
+        const isDue = !r.completed && isPast;
+        const timeUntil = scheduled.getTime() - now.getTime();
+        const minutesUntil = Math.floor(timeUntil / 60000);
+        console.log(`[Reminder Check] - "${r.text}" scheduled: ${scheduledLocal} (${r.scheduledTime}), completed: ${r.completed}, isPast: ${isPast}, isDue: ${isDue}, ${minutesUntil} minutes until due`);
+      });
+    }
     
     for (const reminder of dueReminders) {
       // Announce reminder via TTS
@@ -268,9 +337,9 @@ async function checkReminders() {
       
       try {
         await tts.speak(announcement);
-        // Mark as completed after announcing
-        await reminders.markCompleted(reminder.id);
-        console.log(`✅ Reminder completed: ${reminder.text}`);
+        // Delete reminder after announcing
+        await reminders.delete(reminder.id);
+        console.log(`✅ Reminder deleted: ${reminder.text}`);
       } catch (error: any) {
         console.error(`Failed to announce reminder: ${error.message}`);
         addLog(`ERR: Failed to announce reminder: ${reminder.text}`);
@@ -290,9 +359,15 @@ async function checkReminders() {
   }
 }
 
-// Start reminder checker (check every 60 seconds)
-reminderCheckInterval = setInterval(checkReminders, 60 * 1000);
-console.log(`⏰ Reminder checker started (checking every 60 seconds)`);
+// Clear any existing interval (important for --watch mode)
+if (globalThis.__jarvisReminderInterval) {
+  clearInterval(globalThis.__jarvisReminderInterval);
+  console.log(`⏰ Cleared existing reminder checker interval`);
+}
+
+// Start reminder checker (check every 5 seconds)
+globalThis.__jarvisReminderInterval = setInterval(checkReminders, 5 * 1000);
+console.log(`⏰ Reminder checker started (checking every 5 seconds)`);
 
 // Check immediately on startup
 checkReminders();
@@ -300,9 +375,10 @@ checkReminders();
 // Graceful shutdown
 process.on("SIGINT", () => {
   console.log("\nShutting down...");
-  if (reminderCheckInterval) {
-    clearInterval(reminderCheckInterval);
+  if (globalThis.__jarvisReminderInterval) {
+    clearInterval(globalThis.__jarvisReminderInterval);
   }
+  stopVibrationSound();
   jarvis.stop();
   server.stop();
   process.exit(0);

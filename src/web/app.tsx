@@ -22,6 +22,7 @@ function App() {
   const [showMicSelector, setShowMicSelector] = useState(false);
 
   const ws = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fullscreen toggle
   const toggleFullscreen = () => {
@@ -84,6 +85,11 @@ function App() {
         ws.current.onopen = () => {
           console.log("WebSocket connected");
           setIsConnected(true);
+          // Clear any pending reconnect timeout since we're connected
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+          }
         };
 
         ws.current.onmessage = (event) => {
@@ -130,7 +136,8 @@ function App() {
         ws.current.onclose = () => {
           console.log("WebSocket disconnected");
           setIsConnected(false);
-          setTimeout(connect, 3000);
+          // Retry connection after 5 seconds
+          reconnectTimeoutRef.current = setTimeout(connect, 5000);
         };
 
         ws.current.onerror = (error) => {
@@ -138,13 +145,20 @@ function App() {
         };
       } catch (error) {
         console.error("Failed to create WebSocket:", error);
-        setTimeout(connect, 3000);
+        // Retry connection after 5 seconds
+        reconnectTimeoutRef.current = setTimeout(connect, 5000);
       }
     };
 
     connect();
 
     return () => {
+      // Clear any pending reconnect timeout
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      // Close WebSocket connection
       ws.current?.close();
     };
   }, [wsUrl]);
