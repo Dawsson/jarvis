@@ -33,5 +33,14 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
+# Training data and models
+training_data/
+jarvis_model/
+
 # Temporary audio files
 temp_audio.wav
+command.wav
+*.wav
+
+# Memory database
+jarvis-memory.json

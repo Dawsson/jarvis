@@ -1,56 +1,95 @@
-# Jarvis Voice Assistant
+# JARVIS
 
-A voice-activated assistant that listens for "Hey Jarvis" and transcribes your speech using Groq's ultra-fast Whisper API.
+A voice-activated AI assistant with custom wake word detection, inspired by JARVIS from Iron Man.
 
-## How It Works
+## Features
 
-1. **OpenWakeWord** continuously listens for "Hey Jarvis" (runs 100% locally, no API calls!)
-2. When detected, starts recording your voice
-3. **VAD** (Voice Activity Detection) automatically detects when you stop speaking
-4. Sends audio to **Groq Whisper** for transcription (blazing fast!)
-5. Displays the transcribed text
-6. Returns to listening for wake word
+- **Custom Wake Word Detection**: Train your own "Jarvis" wake word model
+- **Voice Commands**: Natural language interaction with AI (Llama 4 Scout)
+- **Project & Todo Management**: Organize tasks by project with persistent storage
+- **Text-to-Speech**: British-accented responses
+- **Terminal UI**: Clean interface with real-time status and logs
+
+## Project Structure
+
+```
+jarvis/
+├── src/                      # TypeScript source code
+│   ├── ui/                   # Terminal UI components
+│   ├── tools/                # AI tool definitions
+│   ├── jarvis-engine.ts      # Main AI coordination
+│   ├── memory.ts             # Local JSON database
+│   └── tts.ts                # Text-to-speech
+├── scripts/                  # Python scripts
+│   ├── training/             # Model training scripts
+│   │   ├── 1_collect_samples.py
+│   │   ├── 2_train_model.py
+│   │   └── 3_test_model.py
+│   ├── utils/                # Utility scripts
+│   │   ├── normalize_and_renumber.py
+│   │   └── clean_*.py
+│   ├── run_inference.py      # Production wake word detection
+│   └── record_command.py     # Audio recording
+├── jarvis_model/             # Trained TensorFlow model (gitignored)
+└── training_data/            # Audio samples (gitignored)
+```
 
 ## Prerequisites
 
-- **uv/uvx**: Fast Python package manager (install: `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- **Bun**: JavaScript runtime (you already have this)
+- **uvx**: Fast Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- **Bun**: JavaScript runtime
 
 ## Setup
 
-1. Install Node dependencies:
-   ```bash
-   bun install
-   ```
+1. Install dependencies:
+```bash
+bun install
+```
 
-2. Get your Groq API key:
-   - Get free API key at https://console.groq.com
+2. Set up environment:
+```bash
+echo "GROQ_API_KEY=your_key_here" > .env
+```
 
-3. Create `.env` file:
-   ```bash
-   cp .env.example .env
-   ```
-   Then edit `.env` and add your Groq API key.
+3. Train your wake word model:
+```bash
+# Collect samples (say "Jarvis" ~100 times)
+uvx --with pyaudio --with numpy python3 scripts/training/1_collect_samples.py
 
-4. Run Jarvis:
-   ```bash
-   bun run index.ts
-   ```
+# Train model
+uvx --with tensorflow --with librosa python3 scripts/training/2_train_model.py
 
-   On first run, `uvx` will automatically install OpenWakeWord and PyAudio.
+# Test model
+uvx --with tensorflow --with librosa --with pyaudio python3 scripts/training/3_test_model.py
+```
+
+4. Run JARVIS:
+```bash
+bun run src/index.tsx
+```
 
 ## Usage
 
-1. Start the app
-2. Say "Hey Jarvis" to activate
-3. Speak your command or question
-4. Stop talking and wait for transcription
-5. Repeat!
+**Wake Word**: Say "Jarvis" to activate
 
-Press `Ctrl+C` to exit.
+**Keyboard Shortcuts**:
+- **m** - Change microphone
+- **p** - Replay last command
+- **c** - Copy logs to clipboard
+- **q** - Quit
 
-## Why This Stack?
+**Voice Commands**:
+- "Create project [name]"
+- "Add todo [task]"
+- "List todos"
+- "Complete todo [number]"
+- "What time is it?"
+- And more natural language commands...
 
-- **OpenWakeWord**: 100% local, no API keys, trained on "Hey Jarvis"
-- **Groq**: 10-20x faster than other Whisper providers
-- **uvx**: No Python environment setup needed, handles dependencies automatically
+## Tech Stack
+
+- **Runtime**: Bun
+- **UI**: OpenTUI (React for terminal)
+- **AI**: Groq (Llama 4 Scout + Whisper + TTS)
+- **Wake Word**: Custom TensorFlow/Keras model
+- **Database**: lowdb (local JSON)

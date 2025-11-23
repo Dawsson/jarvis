@@ -1,19 +1,36 @@
 {
   "name": "jarvis",
-  "module": "index.ts",
+  "module": "src/index.tsx",
   "type": "module",
   "private": true,
+  "scripts": {
+    "dev": "bun src/index.tsx",
+    "start": "bun src/index.tsx",
+    "collect": "uvx --with pyaudio --with numpy python3 scripts/training/1_collect_samples.py",
+    "train": "uvx --with tensorflow --with librosa --with scikit-learn --with soundfile python3 scripts/training/2_train_model.py",
+    "test-model": "uvx --with tensorflow --with librosa --with pyaudio python3 scripts/training/3_test_model.py",
+    "list-mics": "uvx --with pyaudio python3 scripts/list_microphones.py"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.6"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
-    "@ricky0123/vad-node": "^0.0.3",
-    "groq": "^4.18.0",
+    "@ai-sdk/groq": "^2.0.31",
+    "@opentui/core": "^0.1.48",
+    "@opentui/react": "^0.1.48",
+    "@tensorflow/tfjs-node": "^4.22.0",
+    "ai": "^5.0.100",
     "groq-sdk": "^0.36.0",
-    "node-record-lpcm16": "^1.0.1"
+    "lowdb": "^7.0.1",
+    "node-record-lpcm16": "^1.0.1",
+    "react": "^19.2.0",
+    "wav-decoder": "^1.3.0",
+    "zod": "^4.1.12"
   },
   "trustedDependencies": [
     "onnxruntime-node"
