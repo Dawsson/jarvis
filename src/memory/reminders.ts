@@ -83,13 +83,12 @@ export const reminders = {
     const dueReminders = allReminders.filter((r: Reminder) => {
       const scheduled = new Date(r.scheduledTime);
       const isDue = !r.completed && scheduled <= now;
-      if (!isDue && !r.completed) {
-        // Debug: log why reminder isn't due
-        console.log(`[Reminders] Reminder "${r.text}" not due: completed=${r.completed}, scheduled=${scheduled.toISOString()}, now=${now.toISOString()}, scheduled<=now=${scheduled <= now}`);
-      }
       return isDue;
     });
-    console.log(`[Reminders] getDue() found ${dueReminders.length} due reminders out of ${allReminders.length} total`);
+    // Only log when there are due reminders
+    if (dueReminders.length > 0) {
+      console.log(`[Reminders] getDue() found ${dueReminders.length} due reminders`);
+    }
     return dueReminders;
   },
 

@@ -106,9 +106,15 @@ export class JarvisEngine {
     this.wakeWordDetector = spawn("uvx", args);
 
     this.wakeWordDetector.stdout.on("data", async (data: Buffer) => {
-      const message = data.toString().trim();
+      const output = data.toString();
+      // Split by newlines and process each line separately
+      const lines = output.split('\n').map(line => line.trim()).filter(line => line.length > 0);
 
-      if (message === "READY") {
+      for (const message of lines) {
+        console.log(`📨 [JarvisEngine] Received from Python stdout: "${message}"`);
+
+        if (message === "READY") {
+        console.log("✅ [JarvisEngine] Python script is READY");
         const readyMsg = this.config.useWakeWord === false
           ? "Recording system ready (keyboard mode)"
           : "Voice system ready";
@@ -143,12 +149,19 @@ export class JarvisEngine {
       } else if (message.startsWith("DEBUG:")) {
         this.emit({ type: "log", data: message.replace("DEBUG: ", "") });
       } else if (message === "RECORDING_COMPLETE") {
+        console.log("📥 [JarvisEngine] Received RECORDING_COMPLETE from Python");
+        this.emit({ type: "log", data: "📥 Received RECORDING_COMPLETE from Python, calling handleRecordingComplete()" });
         await this.handleRecordingComplete();
+      } else {
+        console.log(`⚠️ [JarvisEngine] Unknown message from Python: "${message}"`);
+        this.emit({ type: "log", data: `Unknown message from Python: "${message}"` });
+      }
       }
     });
 
     this.wakeWordDetector.stderr.on("data", (data: Buffer) => {
       const msg = data.toString();
+      console.log(`⚠️ [JarvisEngine] Python stderr: ${msg}`);
       if (!msg.includes("WARNING") && !msg.includes("FutureWarning")) {
         this.emit({ type: "log", data: msg });
       }
@@ -340,12 +353,45 @@ Default to expectFollowUp=false unless absolutely necessary.`,
   }
 
   private async handleRecordingComplete() {
+    console.log(`📋 [JarvisEngine] handleRecordingComplete() called, current status: ${this.status}`);
+    this.emit({ type: "log", data: `📋 handleRecordingComplete() called, current status: ${this.status}` });
+
+    // If we're not in recording status, we've already cancelled - ignore this
+    if (this.status !== "recording") {
+      console.log(`⚠️ [JarvisEngine] Ignoring recording completion - status is '${this.status}', expected 'recording'`);
+      this.emit({ type: "log", data: `⚠️ Ignoring recording completion - status is '${this.status}', expected 'recording'` });
+      return;
+    }
+
+    console.log("✅ [JarvisEngine] Status check passed, proceeding with processing");
+    this.emit({ type: "log", data: "✅ Status check passed, proceeding with processing" });
     this.updateStatus("processing");
+    console.log("🎤 [JarvisEngine] Starting transcription...");
+    this.emit({ type: "log", data: "Starting transcription..." });
 
     const tempFile = join(process.cwd(), "command.wav");
 
     try {
+      // Check if file exists and has content
+      const { stat } = await import('fs/promises');
+      try {
+        const fileStats = await stat(tempFile);
+        if (fileStats.size < 1000) {
+          this.emit({ type: "log", data: "Recording too short, ignoring" });
+          this.updateStatus("listening");
+          this.isRecording = false;
+          return;
+        }
+        this.emit({ type: "log", data: `Audio file size: ${fileStats.size} bytes` });
+      } catch (fileError) {
+        this.emit({ type: "error", data: "Recording file not found" });
+        this.updateStatus("listening");
+        this.isRecording = false;
+        return;
+      }
+
       // Step 1: Transcribe audio using AI SDK
+      this.emit({ type: "log", data: "Loading vocabulary..." });
       // Load common words and custom words to help Whisper recognize them
       const [commonWordsList, customWords] = await Promise.all([
         commonWords.getAll(),
@@ -363,8 +409,11 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           return cw.word;
         })
         .join(', ');
-      
+
+      this.emit({ type: "log", data: "Reading audio file..." });
       const audioBuffer = await readFile(tempFile);
+
+      this.emit({ type: "log", data: "Calling Whisper API..." });
       const transcriptResult = await transcribe({
         model: groq.transcription('whisper-large-v3-turbo'),
         audio: audioBuffer,
@@ -378,12 +427,14 @@ Default to expectFollowUp=false unless absolutely necessary.`,
       });
 
       const transcriptionText = transcriptResult.text;
+      this.emit({ type: "log", data: `Transcription complete: "${transcriptionText}"` });
       this.emit({ type: "transcription", data: transcriptionText });
 
       // Save user message to conversation history
       await conversationHistory.add('user', transcriptionText);
 
       // Step 2: Generate AI response with tools
+      this.emit({ type: "log", data: "Generating AI response..." });
       const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(transcriptionText);
       
       // Save assistant response to conversation history
@@ -392,9 +443,11 @@ Default to expectFollowUp=false unless absolutely necessary.`,
 
       // Step 3: Speak the response via TTS
       // Keep status as "processing" while speaking so wake word can interrupt
+      this.emit({ type: "log", data: "Speaking response..." });
       try {
         if (speechText && speechText.trim().length > 0) {
           await this.tts.speak(speechText);
+          this.emit({ type: "log", data: "TTS complete" });
         }
       } catch (ttsError: any) {
         // Ignore cancellation errors (they're expected when interrupted)
@@ -402,9 +455,10 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           this.emit({ type: "log", data: `TTS failed: ${ttsError.message}` });
         }
       }
-      
+
       // Update status after TTS completes (or is cancelled)
       // Only change status if we're still processing (not already interrupted)
+      this.emit({ type: "log", data: `Current status before final check: ${this.status}` });
       if (this.status === "processing") {
         this.isRecording = false;
 
@@ -415,12 +469,16 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           // Send command to unified script to record immediately
           this.wakeWordDetector?.stdin?.write("RECORD_NOW\n");
         } else {
+          this.emit({ type: "log", data: "Returning to listening state" });
           this.updateStatus("listening");
         }
+      } else {
+        this.emit({ type: "log", data: "Status already changed, not updating" });
       }
       // If status is not "processing", it means we were interrupted and status was already reset
     } catch (error: any) {
-      this.emit({ type: "error", data: error?.message || "Processing failed" });
+      this.emit({ type: "error", data: `Processing error: ${error?.message || "Unknown error"}` });
+      this.emit({ type: "log", data: `Error stack: ${error?.stack}` });
       this.updateStatus("listening");
       this.isRecording = false;
     }
@@ -445,8 +503,11 @@ Default to expectFollowUp=false unless absolutely necessary.`,
 
   // Manual activation methods for keyboard mode
   manualActivate() {
+    console.log(`🎬 [JarvisEngine] manualActivate() called, current status: ${this.status}`);
+
     // If currently speaking/processing, cancel speech
     if (this.status === "processing") {
+      console.log("⏸️ [JarvisEngine] Interrupting current processing/speech");
       this.emit({ type: "log", data: "Interrupted - stopping speech" });
       this.tts.cancel();
       this.isRecording = false;
@@ -456,6 +517,7 @@ Default to expectFollowUp=false unless absolutely necessary.`,
 
     // If already recording, ignore
     if (this.status === "recording") {
+      console.log("⏭️ [JarvisEngine] Already recording, ignoring activation");
       return;
     }
 
@@ -463,27 +525,42 @@ Default to expectFollowUp=false unless absolutely necessary.`,
     spawn("afplay", ["/System/Library/Sounds/Glass.aiff"]);
 
     // Start recording
+    console.log("🔴 [JarvisEngine] Starting recording, updating status to 'recording'");
     this.emit({ type: "log", data: "Manual activation - recording started" });
     this.isRecording = true;
     this.updateStatus("recording");
 
     // Send command to unified script to start recording
     if (this.wakeWordDetector && this.wakeWordDetector.stdin) {
+      console.log("📤 [JarvisEngine] Sending RECORD_NOW to Python script");
+      this.emit({ type: "log", data: "Sending RECORD_NOW to Python script" });
       this.wakeWordDetector.stdin.write("RECORD_NOW\n");
+    } else {
+      console.log("❌ [JarvisEngine] ERROR: wakeWordDetector stdin not available");
+      this.emit({ type: "error", data: "Cannot send RECORD_NOW - wakeWordDetector stdin not available" });
     }
   }
 
   manualDeactivate() {
+    console.log(`⏹️ [JarvisEngine] manualDeactivate() called, current status: ${this.status}`);
+
     // Only deactivate if currently recording
     if (this.status !== "recording") {
+      console.log(`⚠️ [JarvisEngine] Cannot deactivate - status is '${this.status}', not 'recording'`);
+      this.emit({ type: "log", data: `Cannot deactivate - status is ${this.status}, not recording` });
       return;
     }
 
     // Send command to unified script to stop recording
     if (this.wakeWordDetector && this.wakeWordDetector.stdin) {
+      console.log("📤 [JarvisEngine] Sending STOP_RECORDING to Python script");
+      this.emit({ type: "log", data: "Sending STOP_RECORDING to Python script" });
       this.wakeWordDetector.stdin.write("STOP_RECORDING\n");
+      console.log("⏳ [JarvisEngine] Waiting for RECORDING_COMPLETE from Python...");
+      this.emit({ type: "log", data: "Recording stopped - waiting for RECORDING_COMPLETE from Python..." });
+    } else {
+      console.log("❌ [JarvisEngine] ERROR: wakeWordDetector stdin not available");
+      this.emit({ type: "error", data: "Cannot send STOP_RECORDING - wakeWordDetector stdin not available" });
     }
-
-    this.emit({ type: "log", data: "Manual deactivation - recording stopped" });
   }
 }

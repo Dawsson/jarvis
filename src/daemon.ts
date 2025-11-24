@@ -225,28 +225,15 @@ if (activationMode === "keyboard" || activationMode === "both") {
 
     if (message === "READY") {
       console.log("⌨️  Keyboard listener ready");
-      console.log("   • Hold Right Option: Activate while holding");
-      console.log("   • Shift + Right Option: Toggle on/off");
-      console.log("   • Escape: Cancel listening");
-    } else if (message === "PRESS_START") {
-      // Start recording when Right Option is pressed
-      addLog("Right Option pressed - activating");
-      jarvis.manualActivate();
-    } else if (message === "PRESS_END") {
-      // Stop recording when Right Option is released
-      addLog("Right Option released - deactivating");
-      jarvis.manualDeactivate();
+      console.log("   • Press Right Option once: Start recording");
+      console.log("   • Press Right Option again: Stop and process");
     } else if (message === "TOGGLE_ON") {
-      // Toggle on - keep recording until toggled off
-      addLog("Toggle mode ON - listening until toggled off");
+      // Start recording
+      addLog("Right Option pressed - recording started");
       jarvis.manualActivate();
     } else if (message === "TOGGLE_OFF") {
-      // Toggle off - stop recording
-      addLog("Toggle mode OFF");
-      jarvis.manualDeactivate();
-    } else if (message === "CANCEL") {
-      // Cancel - stop any active recording
-      addLog("Cancelled");
+      // Stop recording and process
+      addLog("Right Option pressed - recording stopped, processing...");
       jarvis.manualDeactivate();
     }
   });

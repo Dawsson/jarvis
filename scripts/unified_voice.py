@@ -4,17 +4,23 @@ Unified voice capture: wake word detection + recording with rolling buffer
 Captures 1.5 seconds BEFORE wake word for better transcription accuracy
 """
 
+import sys
+print("🐍 [Python] unified_voice.py starting...", flush=True)
+
 import numpy as np
 import librosa
 import pyaudio
 import json
-import sys
 import wave
 import threading
 import select
+from collections import deque
+
+print("🐍 [Python] Imports complete", flush=True)
 
 # Parse command-line arguments
 no_wake_word = "--no-wake-word" in sys.argv
+print(f"🐍 [Python] no_wake_word = {no_wake_word}", flush=True)
 if no_wake_word:
     sys.argv.remove("--no-wake-word")
 
@@ -60,6 +66,7 @@ CONFIDENCE_SMOOTHING_WINDOW = deque(maxlen=CONSECUTIVE_DETECTIONS_REQUIRED)
 
 # Get microphone index
 mic_index = int(sys.argv[1]) if len(sys.argv) > 1 else None
+print(f"🐍 [Python] Requested microphone index: {mic_index}", flush=True)
 
 # Setup audio
 p = pyaudio.PyAudio()
@@ -71,10 +78,31 @@ stream_kwargs = {
     "frames_per_buffer": CHUNK,
 }
 
+# Try to open with specified microphone, fall back to default if it fails
+stream = None
 if mic_index is not None:
-    stream_kwargs["input_device_index"] = mic_index
+    try:
+        print(f"🐍 [Python] Attempting to open microphone index {mic_index}", flush=True)
+        stream_kwargs["input_device_index"] = mic_index
+        stream = p.open(**stream_kwargs)
+        print(f"🐍 [Python] Successfully opened microphone index {mic_index}", flush=True)
+    except Exception as e:
+        print(f"🐍 [Python] Failed to open microphone index {mic_index}: {e}", flush=True)
+        print(f"🐍 [Python] Falling back to default microphone", flush=True)
+        stream = None
 
-stream = p.open(**stream_kwargs)
+# If no stream yet, try default microphone
+if stream is None:
+    try:
+        # Remove input_device_index to use default
+        if "input_device_index" in stream_kwargs:
+            del stream_kwargs["input_device_index"]
+        print(f"🐍 [Python] Opening default microphone", flush=True)
+        stream = p.open(**stream_kwargs)
+        print(f"🐍 [Python] Successfully opened default microphone", flush=True)
+    except Exception as e:
+        print(f"🐍 [Python] FATAL: Failed to open default microphone: {e}", flush=True)
+        sys.exit(1)
 
 # Flags for manual recording control
 record_next = threading.Event()
@@ -82,19 +110,30 @@ stop_recording = threading.Event()
 
 def stdin_listener():
     """Listen for commands from Node.js via stdin"""
+    print("DEBUG: stdin_listener starting, checking if stdin is available", flush=True)
+    print(f"DEBUG: stdin.isatty() = {sys.stdin.isatty()}", flush=True)
+    print(f"DEBUG: stdin.readable() = {sys.stdin.readable()}", flush=True)
+
     while True:
-        if select.select([sys.stdin], [], [], 0.1)[0]:
-            line = sys.stdin.readline().strip()
-            if line == "RECORD_NOW":
-                record_next.set()
-                stop_recording.clear()
-            elif line == "STOP_RECORDING":
-                stop_recording.set()
+        try:
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                line = sys.stdin.readline().strip()
+                print(f"DEBUG: stdin received line: '{line}'", flush=True)
+                if line == "RECORD_NOW":
+                    print("DEBUG: Received RECORD_NOW command", flush=True)
+                    record_next.set()
+                    stop_recording.clear()
+                elif line == "STOP_RECORDING":
+                    print("DEBUG: Received STOP_RECORDING command", flush=True)
+                    stop_recording.set()
+        except Exception as e:
+            print(f"DEBUG: stdin_listener error: {e}", flush=True)
 
 # Start stdin listener in background thread
 listener_thread = threading.Thread(target=stdin_listener, daemon=True)
 listener_thread.start()
 
+print("DEBUG: stdin listener thread started", flush=True)
 print("READY", flush=True)
 
 
@@ -209,6 +248,7 @@ def save_recording(frames, filename="command.wav"):
 
 def record_command():
     """Record audio after wake word until silence detected or manual stop"""
+    print(f"DEBUG: record_command() started", flush=True)
     frames = []
 
     # Include pre-buffer (1.5s before wake word)
@@ -221,10 +261,11 @@ def record_command():
     recording_chunks = 0
     max_chunks = int((MAX_RECORDING_DURATION * RATE) / CHUNK)
 
+    print(f"DEBUG: Entering recording loop (max {max_chunks} chunks)", flush=True)
     while recording_chunks < max_chunks:
         # Check for manual stop command
         if stop_recording.is_set():
-            print(f"DEBUG: Stopping - manual stop requested", flush=True)
+            print(f"DEBUG: Stopping - manual stop requested (recorded {recording_chunks} chunks)", flush=True)
             stop_recording.clear()
             break
 
@@ -248,9 +289,13 @@ def record_command():
             print(f"DEBUG: Stopping - silence detected ({silence_chunks} chunks)", flush=True)
             break
 
+    print(f"DEBUG: Recording loop ended, total {len(frames)} chunks", flush=True)
     # Save to file
+    print(f"DEBUG: Saving recording to command.wav", flush=True)
     save_recording(frames)
+    print(f"DEBUG: Recording saved, sending RECORDING_COMPLETE", flush=True)
     print("RECORDING_COMPLETE", flush=True)
+    print(f"DEBUG: RECORDING_COMPLETE sent", flush=True)
 
 
 # Main loop
