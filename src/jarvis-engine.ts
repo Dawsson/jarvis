@@ -32,6 +32,7 @@ export interface JarvisConfig {
   microphoneIndex: number | null; // null = default
   groqApiKey: string;
   microphoneName?: string; // Optional: name of the microphone device
+  useWakeWord?: boolean; // Default true, set to false for keyboard mode
 }
 
 export type JarvisStatus =
@@ -97,13 +98,21 @@ export class JarvisEngine {
       args.push(this.config.microphoneIndex.toString());
     }
 
+    // Add --no-wake-word flag if wake word is disabled (keyboard-only mode)
+    if (this.config.useWakeWord === false) {
+      args.push("--no-wake-word");
+    }
+
     this.wakeWordDetector = spawn("uvx", args);
 
     this.wakeWordDetector.stdout.on("data", async (data: Buffer) => {
       const message = data.toString().trim();
 
       if (message === "READY") {
-        this.emit({ type: "log", data: "Voice system ready" });
+        const readyMsg = this.config.useWakeWord === false
+          ? "Recording system ready (keyboard mode)"
+          : "Voice system ready";
+        this.emit({ type: "log", data: readyMsg });
       } else if (message.startsWith("DETECTED:")) {
         const confidence = parseFloat(message.split(":")[1]);
         
@@ -432,5 +441,49 @@ Default to expectFollowUp=false unless absolutely necessary.`,
       await new Promise((resolve) => setTimeout(resolve, 500));
       await this.start();
     }
+  }
+
+  // Manual activation methods for keyboard mode
+  manualActivate() {
+    // If currently speaking/processing, cancel speech
+    if (this.status === "processing") {
+      this.emit({ type: "log", data: "Interrupted - stopping speech" });
+      this.tts.cancel();
+      this.isRecording = false;
+      this.updateStatus("listening");
+      // Continue to start recording
+    }
+
+    // If already recording, ignore
+    if (this.status === "recording") {
+      return;
+    }
+
+    // Play activation sound
+    spawn("afplay", ["/System/Library/Sounds/Glass.aiff"]);
+
+    // Start recording
+    this.emit({ type: "log", data: "Manual activation - recording started" });
+    this.isRecording = true;
+    this.updateStatus("recording");
+
+    // Send command to unified script to start recording
+    if (this.wakeWordDetector && this.wakeWordDetector.stdin) {
+      this.wakeWordDetector.stdin.write("RECORD_NOW\n");
+    }
+  }
+
+  manualDeactivate() {
+    // Only deactivate if currently recording
+    if (this.status !== "recording") {
+      return;
+    }
+
+    // Send command to unified script to stop recording
+    if (this.wakeWordDetector && this.wakeWordDetector.stdin) {
+      this.wakeWordDetector.stdin.write("STOP_RECORDING\n");
+    }
+
+    this.emit({ type: "log", data: "Manual deactivation - recording stopped" });
   }
 }

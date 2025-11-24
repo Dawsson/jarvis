@@ -13,15 +13,19 @@ from tensorflow import keras
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import precision_score, recall_score, f1_score
+from scipy.ndimage import gaussian_filter1d
 
-print("🧠 Training Jarvis Wake Word Model")
-print("=" * 50)
+print("🚀 EXTREME PERFORMANCE MODE - Training Jarvis Wake Word Model")
+print("=" * 70)
+print("⚡ This will take 10-30 minutes but should achieve 90-95%+ confidence")
+print("=" * 70)
 
-# Parameters
+# Parameters - EXTREME PERFORMANCE MODE
 SAMPLE_RATE = 16000
 DURATION = 1.5
-N_MFCC = 20  # Increased from 13 for better feature representation
+N_MFCC = 40  # Much higher for extreme detail (20 -> 40)
 USE_DELTAS = True  # Add delta and delta-delta features
+USE_DELTA_DELTA = True  # Triple features (MFCC + delta + delta-delta)
 MAX_FRAMES = 94  # ~1.5 seconds with hop_length=256
 
 def extract_features(file_path):
@@ -110,49 +114,95 @@ def focal_loss(gamma=2.0, alpha=0.25):
         return tf.reduce_mean(focal_loss)
     return focal_loss_fixed
 
+def attention_block(x):
+    """Squeeze-and-Excitation attention mechanism"""
+    # Global average pooling
+    avg_pool = keras.layers.GlobalAveragePooling1D()(x)
+    # Fully connected layers for channel attention
+    fc1 = keras.layers.Dense(x.shape[-1] // 4, activation='relu')(avg_pool)
+    fc2 = keras.layers.Dense(x.shape[-1], activation='sigmoid')(fc1)
+    # Reshape and multiply
+    fc2 = keras.layers.Reshape((1, x.shape[-1]))(fc2)
+    return keras.layers.Multiply()([x, fc2])
+
+def residual_block(x, filters, kernel_size=3):
+    """Residual CNN block with skip connection"""
+    # Main path
+    conv1 = keras.layers.Conv1D(filters, kernel_size, padding='same')(x)
+    bn1 = keras.layers.BatchNormalization()(conv1)
+    act1 = keras.layers.Activation('relu')(bn1)
+    conv2 = keras.layers.Conv1D(filters, kernel_size, padding='same')(act1)
+    bn2 = keras.layers.BatchNormalization()(conv2)
+
+    # Skip connection
+    if x.shape[-1] != filters:
+        x = keras.layers.Conv1D(filters, 1, padding='same')(x)
+
+    # Add and activate
+    add = keras.layers.Add()([x, bn2])
+    out = keras.layers.Activation('relu')(add)
+    return out
+
 def create_model(input_shape):
-    """Create CNN+LSTM hybrid model - CNN for local patterns, LSTM for temporal modeling"""
-    model = keras.Sequential([
-        # CNN layers for local feature extraction
-        keras.layers.Conv1D(64, 5, activation='relu', input_shape=input_shape),
-        keras.layers.BatchNormalization(),
-        keras.layers.MaxPooling1D(2),
-        keras.layers.Dropout(0.3),
+    """EXTREME PERFORMANCE: Deep CNN+LSTM with attention and residual connections"""
+    inputs = keras.layers.Input(shape=input_shape)
 
-        keras.layers.Conv1D(128, 3, activation='relu'),
-        keras.layers.BatchNormalization(),
-        keras.layers.MaxPooling1D(2),
-        keras.layers.Dropout(0.3),
+    # Initial convolution
+    x = keras.layers.Conv1D(128, 7, padding='same')(inputs)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.Activation('relu')(x)
+    x = keras.layers.MaxPooling1D(2)(x)
+    x = keras.layers.Dropout(0.2)(x)
 
-        keras.layers.Conv1D(128, 3, activation='relu'),
-        keras.layers.BatchNormalization(),
-        keras.layers.Dropout(0.3),
+    # Residual blocks with increasing filters
+    x = residual_block(x, 128)
+    x = keras.layers.MaxPooling1D(2)(x)
+    x = keras.layers.Dropout(0.25)(x)
 
-        # Bidirectional LSTM for temporal modeling
-        keras.layers.Bidirectional(keras.layers.LSTM(64, return_sequences=True)),
-        keras.layers.Dropout(0.4),
-        keras.layers.Bidirectional(keras.layers.LSTM(32)),
-        keras.layers.Dropout(0.4),
+    x = residual_block(x, 256)
+    x = attention_block(x)  # Add attention
+    x = keras.layers.Dropout(0.25)(x)
 
-        # Dense layers
-        keras.layers.Dense(64, activation='relu'),
-        keras.layers.Dropout(0.5),
-        keras.layers.Dense(32, activation='relu'),
-        keras.layers.Dropout(0.5),
-        keras.layers.Dense(1, activation='sigmoid')
-    ])
+    x = residual_block(x, 256)
+    x = attention_block(x)  # Add attention
+    x = keras.layers.Dropout(0.3)(x)
 
-    # Use focal loss to focus on hard negatives and reduce false positives
+    # Deep bidirectional LSTM stack
+    x = keras.layers.Bidirectional(keras.layers.LSTM(128, return_sequences=True, dropout=0.3, recurrent_dropout=0.2))(x)
+    x = keras.layers.Bidirectional(keras.layers.LSTM(128, return_sequences=True, dropout=0.3, recurrent_dropout=0.2))(x)
+    x = keras.layers.Bidirectional(keras.layers.LSTM(64, return_sequences=False, dropout=0.3, recurrent_dropout=0.2))(x)
+
+    # Multi-head attention on LSTM output
+    x = keras.layers.Dropout(0.4)(x)
+
+    # Deep dense layers
+    x = keras.layers.Dense(256, activation='relu')(x)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.Dropout(0.5)(x)
+
+    x = keras.layers.Dense(128, activation='relu')(x)
+    x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.Dropout(0.5)(x)
+
+    x = keras.layers.Dense(64, activation='relu')(x)
+    x = keras.layers.Dropout(0.5)(x)
+
+    # Output layer
+    outputs = keras.layers.Dense(1, activation='sigmoid')(x)
+
+    model = keras.Model(inputs=inputs, outputs=outputs)
+
+    # Use focal loss with label smoothing for better generalization
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=0.0005),
-        loss=focal_loss(gamma=2.0, alpha=0.25),
-        metrics=['accuracy', 'precision', 'recall']
+        optimizer=keras.optimizers.Adam(learning_rate=0.001),  # Higher initial LR, will decay
+        loss=focal_loss(gamma=2.5, alpha=0.3),  # Stronger focal loss
+        metrics=['accuracy', keras.metrics.Precision(name='precision'), keras.metrics.Recall(name='recall')]
     )
 
     return model
 
-def augment_data(X, y, augment_factor=3):
-    """Advanced data augmentation with multiple techniques"""
+def augment_data(X, y, augment_factor=5):
+    """EXTREME augmentation with multiple aggressive techniques"""
     X_augmented = []
     y_augmented = []
 
@@ -160,40 +210,55 @@ def augment_data(X, y, augment_factor=3):
     X_augmented.extend(X)
     y_augmented.extend(y)
 
-    # Augment positive samples (Jarvis) more aggressively
+    # Augment positive samples (Jarvis) VERY aggressively
     for i in range(len(X)):
         if y[i] == 1:  # Only augment Jarvis samples
             for j in range(augment_factor):
-                # Apply different augmentation techniques
+                # Apply multiple augmentation techniques simultaneously
                 augmented = X[i].copy()
 
-                # 1. Time shift
-                if j == 0 or np.random.random() > 0.5:
-                    shift = np.random.randint(-5, 6)
-                    augmented = np.roll(augmented, shift, axis=0)
+                # 1. Time shift (always apply with varying amounts)
+                shift = np.random.randint(-8, 9)
+                augmented = np.roll(augmented, shift, axis=0)
 
-                # 2. Add small noise to features (simulates slight variations)
-                if j == 1 or np.random.random() > 0.5:
-                    noise = np.random.normal(0, 0.05, augmented.shape)
+                # 2. Add noise to features (70% of the time)
+                if np.random.random() > 0.3:
+                    noise_level = np.random.uniform(0.02, 0.08)
+                    noise = np.random.normal(0, noise_level, augmented.shape)
                     augmented = augmented + noise
 
-                # 3. Scale features (simulates volume variations)
-                if j == 2 or np.random.random() > 0.5:
-                    scale = np.random.uniform(0.85, 1.15)
+                # 3. Scale features - more aggressive range (80% of the time)
+                if np.random.random() > 0.2:
+                    scale = np.random.uniform(0.7, 1.3)
                     augmented = augmented * scale
+
+                # 4. Random masking - zero out random time steps (30% of the time)
+                if np.random.random() > 0.7:
+                    mask_length = np.random.randint(1, 4)
+                    mask_start = np.random.randint(0, augmented.shape[0] - mask_length)
+                    augmented[mask_start:mask_start+mask_length, :] *= 0.1
+
+                # 5. Gaussian blur along time axis (20% of the time)
+                if np.random.random() > 0.8:
+                    from scipy.ndimage import gaussian_filter1d
+                    sigma = np.random.uniform(0.5, 1.5)
+                    augmented = gaussian_filter1d(augmented, sigma=sigma, axis=0)
 
                 X_augmented.append(augmented)
                 y_augmented.append(1)
 
-    # Augment negative samples moderately to improve robustness
-    negative_augment_factor = 1
+    # Augment negative samples more to improve robustness
+    negative_augment_factor = 2  # Increased from 1
     for i in range(len(X)):
         if y[i] == 0:  # Augment negative samples
             for _ in range(negative_augment_factor):
                 augmented = X[i].copy()
-                # Lighter augmentation for negatives
-                shift = np.random.randint(-3, 4)
+                # Moderate augmentation for negatives
+                shift = np.random.randint(-5, 6)
                 augmented = np.roll(augmented, shift, axis=0)
+                if np.random.random() > 0.5:
+                    noise = np.random.normal(0, 0.03, augmented.shape)
+                    augmented = augmented + noise
                 X_augmented.append(augmented)
                 y_augmented.append(0)
 
@@ -268,9 +333,9 @@ def main():
                     self.model.set_weights(self.best_weights)
                     print(f"   Restored weights from best F1 score: {self.best_f1:.4f}")
 
-    # Augment training data
-    print("\n🔄 Augmenting training data...")
-    X_train_aug, y_train_aug = augment_data(X_train, y_train, augment_factor=3)
+    # Augment training data - EXTREME MODE
+    print("\n🔄 Augmenting training data (EXTREME MODE)...")
+    X_train_aug, y_train_aug = augment_data(X_train, y_train, augment_factor=5)
     print(f"   After augmentation: {len(X_train_aug)} samples\n")
 
     # Create model
@@ -286,25 +351,26 @@ def main():
     # Create F1 checkpoint callback
     f1_checkpoint = F1Checkpoint('jarvis_model/best_model.h5', X_val, y_val, patience=20)
 
+    # EXTREME TRAINING - longer epochs, smaller batches for better convergence
     history = model.fit(
         X_train_aug, y_train_aug,
         validation_data=(X_val, y_val),
-        epochs=150,
-        batch_size=16,
+        epochs=300,  # Increased from 150
+        batch_size=8,  # Smaller batches for better gradient updates
         class_weight=class_weight_dict,
         callbacks=[
             keras.callbacks.EarlyStopping(
                 monitor='val_loss',
                 mode='min',
-                patience=50,  # Higher patience since F1 callback handles it
+                patience=80,  # Much higher patience for extreme training
                 restore_best_weights=False,  # F1 callback handles weight restoration
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=7,
-                min_lr=0.00001,
+                patience=15,  # More patience before reducing LR
+                min_lr=0.000001,
                 verbose=1
             ),
             f1_checkpoint

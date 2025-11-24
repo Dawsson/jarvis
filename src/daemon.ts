@@ -9,10 +9,44 @@ import { killExistingInstances } from "./utils/kill-existing";
 import { spawn, type ChildProcess } from "child_process";
 import { join } from "path";
 import * as os from "os";
+import * as readline from "readline";
 
 // Kill any existing instances before starting
 console.log("🔍 Checking for existing instances...");
 killExistingInstances(7777);
+
+// Ask user for activation mode
+console.log("\n🎯 Choose activation mode:");
+console.log("  1. Voice only (say 'Jarvis')");
+console.log("  2. Keyboard only (Right Option key)");
+console.log("  3. Both (voice + keyboard)");
+console.log("");
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+const activationMode = await new Promise<"voice" | "keyboard" | "both">((resolve) => {
+  rl.question("Enter choice (1, 2, or 3): ", (answer) => {
+    rl.close();
+    const choice = answer.trim();
+    if (choice === "2") {
+      resolve("keyboard");
+    } else if (choice === "3") {
+      resolve("both");
+    } else {
+      resolve("voice");
+    }
+  });
+});
+
+const modeDescription =
+  activationMode === "voice" ? "voice only (wake word)" :
+  activationMode === "keyboard" ? "keyboard only (Right Option)" :
+  "both voice and keyboard";
+
+console.log(`\n✅ Using ${modeDescription} activation\n`);
 
 // Store connected clients
 const clients = new Set<ServerWebSocket<{ id: string }>>();
@@ -48,10 +82,14 @@ if (preferredMic.name) {
 const jarvis = new JarvisEngine({
   microphoneIndex: initialMicIndex,
   groqApiKey: apiKey,
+  useWakeWord: activationMode === "voice" || activationMode === "both", // Enable wake word for voice and both modes
 });
 
 // Initialize TTS for reminder announcements (use same British voice as Jarvis)
 const tts = new TextToSpeech(apiKey, 'Basil-PlayAI');
+
+// Keyboard listener process (only in keyboard mode)
+let keyboardListener: ChildProcess | null = null;
 
 // Vibration sound management
 let vibrationSoundProcess: ChildProcess | null = null;
@@ -176,6 +214,52 @@ await jarvis.start();
 await updateProjectData();
 await updateRemindersData();
 console.log("Jarvis engine started");
+
+// Start keyboard listener if in keyboard or both modes
+if (activationMode === "keyboard" || activationMode === "both") {
+  console.log("Starting keyboard listener...");
+  keyboardListener = spawn("uvx", ["--with", "pynput", "python3", "scripts/keyboard_listener.py"]);
+
+  keyboardListener.stdout.on("data", async (data: Buffer) => {
+    const message = data.toString().trim();
+
+    if (message === "READY") {
+      console.log("⌨️  Keyboard listener ready");
+      console.log("   • Hold Right Option: Activate while holding");
+      console.log("   • Shift + Right Option: Toggle on/off");
+      console.log("   • Escape: Cancel listening");
+    } else if (message === "PRESS_START") {
+      // Start recording when Right Option is pressed
+      addLog("Right Option pressed - activating");
+      jarvis.manualActivate();
+    } else if (message === "PRESS_END") {
+      // Stop recording when Right Option is released
+      addLog("Right Option released - deactivating");
+      jarvis.manualDeactivate();
+    } else if (message === "TOGGLE_ON") {
+      // Toggle on - keep recording until toggled off
+      addLog("Toggle mode ON - listening until toggled off");
+      jarvis.manualActivate();
+    } else if (message === "TOGGLE_OFF") {
+      // Toggle off - stop recording
+      addLog("Toggle mode OFF");
+      jarvis.manualDeactivate();
+    } else if (message === "CANCEL") {
+      // Cancel - stop any active recording
+      addLog("Cancelled");
+      jarvis.manualDeactivate();
+    }
+  });
+
+  keyboardListener.stderr.on("data", (data: Buffer) => {
+    const msg = data.toString();
+    console.error("Keyboard listener error:", msg);
+  });
+
+  keyboardListener.on("error", (error) => {
+    console.error("Failed to start keyboard listener:", error);
+  });
+}
 
 // Start vibration sound if Jarvis is already recording (unlikely on startup, but just in case)
 if (jarvisState.status === "recording") {
@@ -314,7 +398,15 @@ const server = Bun.serve({
 
 console.log(`🚀 Jarvis Daemon running at http://localhost:${server.port}`);
 console.log(`📡 WebSocket server ready for connections`);
-console.log(`🎤 Listening for wake word...`);
+
+// Show appropriate message based on activation mode
+if (activationMode === "voice") {
+  console.log(`🎤 Listening for wake word...`);
+} else if (activationMode === "keyboard") {
+  console.log(`⌨️  Ready for keyboard activation (Right Option key)`);
+} else {
+  console.log(`🎤 Listening for wake word or keyboard activation...`);
+}
 
 // System stats checker - runs every 2 seconds
 // Use global to track interval across module reloads
@@ -432,6 +524,9 @@ process.on("SIGINT", () => {
     clearInterval(globalThis.__jarvisStatsInterval);
   }
   stopVibrationSound();
+  if (keyboardListener) {
+    keyboardListener.kill();
+  }
   jarvis.stop();
   server.stop();
   process.exit(0);

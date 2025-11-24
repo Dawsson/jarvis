@@ -8,23 +8,33 @@ import numpy as np
 import librosa
 import pyaudio
 import json
-import tensorflow as tf
-from collections import deque
 import sys
 import wave
 import threading
 import select
 
-# Load wake word model
-# Load without compiling - we don't need the loss function for inference
-model = tf.keras.models.load_model("jarvis_model/model.h5", compile=False)
+# Parse command-line arguments
+no_wake_word = "--no-wake-word" in sys.argv
+if no_wake_word:
+    sys.argv.remove("--no-wake-word")
 
-with open("jarvis_model/metadata.json", "r") as f:
-    metadata = json.load(f)
+# Load wake word model only if wake word detection is enabled
+model = None
+MAX_FRAMES = None
+N_MFCC = None
+USE_DELTAS = False
 
-MAX_FRAMES = metadata["max_frames"]
-N_MFCC = metadata["n_mfcc"]
-USE_DELTAS = metadata.get("use_deltas", False)
+if not no_wake_word:
+    import tensorflow as tf
+    # Load without compiling - we don't need the loss function for inference
+    model = tf.keras.models.load_model("jarvis_model/model.h5", compile=False)
+
+    with open("jarvis_model/metadata.json", "r") as f:
+        metadata = json.load(f)
+
+    MAX_FRAMES = metadata["max_frames"]
+    N_MFCC = metadata["n_mfcc"]
+    USE_DELTAS = metadata.get("use_deltas", False)
 
 # Audio configuration
 RATE = 48000  # High quality for recording
@@ -66,8 +76,9 @@ if mic_index is not None:
 
 stream = p.open(**stream_kwargs)
 
-# Flag for triggering immediate recording (for follow-ups)
+# Flags for manual recording control
 record_next = threading.Event()
+stop_recording = threading.Event()
 
 def stdin_listener():
     """Listen for commands from Node.js via stdin"""
@@ -76,6 +87,9 @@ def stdin_listener():
             line = sys.stdin.readline().strip()
             if line == "RECORD_NOW":
                 record_next.set()
+                stop_recording.clear()
+            elif line == "STOP_RECORDING":
+                stop_recording.set()
 
 # Start stdin listener in background thread
 listener_thread = threading.Thread(target=stdin_listener, daemon=True)
@@ -194,7 +208,7 @@ def save_recording(frames, filename="command.wav"):
 
 
 def record_command():
-    """Record audio after wake word until silence detected"""
+    """Record audio after wake word until silence detected or manual stop"""
     frames = []
 
     # Include pre-buffer (1.5s before wake word)
@@ -208,6 +222,12 @@ def record_command():
     max_chunks = int((MAX_RECORDING_DURATION * RATE) / CHUNK)
 
     while recording_chunks < max_chunks:
+        # Check for manual stop command
+        if stop_recording.is_set():
+            print(f"DEBUG: Stopping - manual stop requested", flush=True)
+            stop_recording.clear()
+            break
+
         data = stream.read(CHUNK, exception_on_overflow=False)
         frames.append(data)
         recording_chunks += 1
@@ -239,10 +259,10 @@ cooldown_frames = 0
 
 try:
     while True:
-        # Check for immediate recording request (follow-up)
+        # Check for immediate recording request (follow-up or manual trigger)
         if record_next.is_set():
             record_next.clear()
-            print("DEBUG: Follow-up recording triggered", flush=True)
+            print("DEBUG: Manual/follow-up recording triggered", flush=True)
             record_command()
             pre_buffer.clear()
             frame_count = 0
@@ -253,6 +273,10 @@ try:
 
         # Always add to pre-buffer (rolling window)
         pre_buffer.extend(audio_chunk)
+
+        # In keyboard-only mode, skip wake word detection
+        if no_wake_word:
+            continue
 
         # Decrease cooldown
         if cooldown_frames > 0:
