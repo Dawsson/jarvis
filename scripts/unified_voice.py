@@ -46,15 +46,15 @@ if not no_wake_word:
 RATE = 48000  # High quality for recording
 CHUNK = 1024
 PRE_BUFFER_DURATION = 1.5  # Capture 1.5s before wake word
-SILENCE_DURATION = 1.2  # Stop after 1.2s of silence
-MAX_RECORDING_DURATION = 10.0  # Max 10s recording
+SILENCE_DURATION = 1.5  # Stop after 1.5s of silence
+MAX_RECORDING_DURATION = 15.0  # Max 15s recording
 
 # Buffers
 pre_buffer_size = int(RATE * PRE_BUFFER_DURATION)
 pre_buffer = deque(maxlen=pre_buffer_size)
 
-# VAD settings
-SILENCE_THRESHOLD = 150
+# VAD settings - Increased threshold to ignore background noise
+SILENCE_THRESHOLD = 300  # Increased from 150 - background noise now counts as silence
 SILENCE_CHUNKS_THRESHOLD = int((SILENCE_DURATION * RATE) / CHUNK)
 
 # Wake word detection settings

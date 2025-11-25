@@ -14,3 +14,9 @@ export { volumeTool } from './volume';
 export { setMicrophoneTool, setEngineInstance } from './microphone';
 export { contextDumpTool } from './context';
 export { addReminderTool, listRemindersTool, deleteReminderTool } from './reminder-tools';
+export {
+  createClaudeSessionTool,
+  getClaudeSessionStatusTool,
+  sendToClaudeSessionTool,
+  listClaudeSessionsTool
+} from './claude-agent';

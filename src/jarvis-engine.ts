@@ -19,7 +19,11 @@ import {
   volumeTool,
   setMicrophoneTool,
   setEngineInstance,
-  contextDumpTool
+  contextDumpTool,
+  createClaudeSessionTool,
+  getClaudeSessionStatusTool,
+  sendToClaudeSessionTool,
+  listClaudeSessionsTool
 } from "./tools";
 import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, deleteTodoTool, updateNotesTool } from "./tools/memory-tools";
 import { addReminderTool, listRemindersTool, deleteReminderTool } from "./tools/reminder-tools";
@@ -216,10 +220,18 @@ export class JarvisEngine {
       // Get active reminders
       const activeReminders = await reminders.getActive();
       const remindersInfo = activeReminders.length > 0
-        ? `Active reminders:\n${activeReminders.map((r: any) => 
+        ? `Active reminders:\n${activeReminders.map((r: any) =>
             `- "${r.text}" at ${new Date(r.scheduledTime).toLocaleString()}`
           ).join('\n')}`
         : 'No active reminders.';
+
+      // Get available repositories for coding sessions
+      const { loadRepositories, formatRepositoriesForContext, getCurrentRepository } = await import('./claude-agent/repository');
+      const repositories = await loadRepositories();
+      const currentRepo = await getCurrentRepository();
+      const reposInfo = repositories.length > 0
+        ? `Available repositories for coding sessions (current: ${currentRepo?.name || 'jarvis'}):\n${formatRepositoriesForContext(repositories)}`
+        : 'No repositories found.';
 
       // Get recent conversation history (last 5 exchanges = 10 messages)
       const recentHistory = await conversationHistory.getRecent(10);
@@ -244,6 +256,7 @@ ${notesInfo}
 ${micInfo}
 ${customWordsInfo}
 ${remindersInfo}
+${reposInfo}
 ${conversationInfo}
 
 CRITICAL: Always respond with a single JSON object (NOT an array). Format:
@@ -304,7 +317,11 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           spotifyShuffle: spotifyShuffleTool,
           volume: volumeTool,
           setMicrophone: setMicrophoneTool,
-          contextDump: contextDumpTool
+          contextDump: contextDumpTool,
+          createClaudeSession: createClaudeSessionTool,
+          getClaudeSessionStatus: getClaudeSessionStatusTool,
+          sendToClaudeSession: sendToClaudeSessionTool,
+          listClaudeSessions: listClaudeSessionsTool
         },
         stopWhen: stepCountIs(5),
         onStepFinish: ({ toolCalls }) => {
