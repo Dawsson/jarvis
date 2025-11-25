@@ -23,7 +23,8 @@ import {
   createClaudeSessionTool,
   getClaudeSessionStatusTool,
   sendToClaudeSessionTool,
-  listClaudeSessionsTool
+  listClaudeSessionsTool,
+  showOnScreenTool
 } from "./tools";
 import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, deleteTodoTool, updateNotesTool } from "./tools/memory-tools";
 import { addReminderTool, listRemindersTool, deleteReminderTool } from "./tools/reminder-tools";
@@ -291,6 +292,8 @@ Examples:
 - "what's on my todo list" → Call listTodos tool, then {"displayText": "Your todos:\n1. Buy milk\n2. Call dentist\n3. Fix bug", "speechText": "You have three items, Sir. Buy milk, call the dentist, and fix a bug", "expectFollowUp": false}
 - "remind me to call mom at 3pm" → Call addReminder tool with text="call mom" and scheduledTime="at 3pm" (or ISO format), then {"displayText": "Reminder added: Call mom at 3:00 PM", "speechText": "I've set a reminder to call mom at 3 PM, Sir", "expectFollowUp": false}
 - "remind me in 30 minutes to take a break" → Call addReminder tool with text="take a break" and scheduledTime="in 30 minutes", then {"displayText": "Reminder added: Take a break at [calculated time]", "speechText": "I'll remind you to take a break in 30 minutes, Sir", "expectFollowUp": false}
+- "show me the claude sessions" → Call showOnScreen tool with view="claude-sessions", then {"displayText": "Showing Claude Code sessions on screen", "speechText": "Switching to the Claude sessions view, Sir", "expectFollowUp": false}
+- "go back to home" → Call showOnScreen tool with view="home", then {"displayText": "Returned to home view", "speechText": "Back to the main dashboard, Sir", "expectFollowUp": false}
 
 Default to expectFollowUp=false unless absolutely necessary.`,
         prompt: userInput,
@@ -322,7 +325,8 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           createClaudeSession: createClaudeSessionTool,
           getClaudeSessionStatus: getClaudeSessionStatusTool,
           sendToClaudeSession: sendToClaudeSessionTool,
-          listClaudeSessions: listClaudeSessionsTool
+          listClaudeSessions: listClaudeSessionsTool,
+          showOnScreen: showOnScreenTool
         },
         stopWhen: stepCountIs(5),
         onStepFinish: ({ toolCalls }) => {

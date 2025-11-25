@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import type { ServerMessage, JarvisState } from "../types/websocket";
+import type { ServerMessage, JarvisState, ScreenView, ClaudeSessionUpdate } from "../types/websocket";
 import type { JarvisStatus } from "../jarvis-engine";
+import type { SessionMessage } from "../claude-agent/types";
 
 // --- Types ---
 interface Reminder {
@@ -117,6 +118,333 @@ const StatDisplay = ({ label, value, unit = "" }: { label: string, value: string
   </div>
 );
 
+// 3. Claude Sessions View Component
+const ClaudeSessionsView = ({
+  sessions,
+  sessionMessages,
+  focusedSessionId,
+  onBack,
+  theme
+}: {
+  sessions: ClaudeSessionUpdate[];
+  sessionMessages: Map<string, SessionMessage[]>;
+  focusedSessionId?: string;
+  onBack: () => void;
+  theme: { bg: string; fg: string; dim: string; accent: string; warn: string; success: string };
+}) => {
+  const [selectedSession, setSelectedSession] = useState<string | null>(focusedSessionId || null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [sessionMessages]);
+
+  const getStatusColor = (status: ClaudeSessionUpdate["status"]) => {
+    switch (status) {
+      case "active": return theme.accent;
+      case "completed": return theme.success;
+      case "error": return theme.warn;
+      default: return theme.dim;
+    }
+  };
+
+  const getStatusIcon = (status: ClaudeSessionUpdate["status"]) => {
+    switch (status) {
+      case "active": return "⚡";
+      case "completed": return "✓";
+      case "error": return "✗";
+      default: return "○";
+    }
+  };
+
+  const formatMessageContent = (msg: SessionMessage): string => {
+    try {
+      const content = msg.content as any;
+      if (typeof content === 'string') return content.substring(0, 200);
+
+      // Handle different message types
+      if (content.type === 'assistant') {
+        // Extract text from assistant messages
+        if (content.message?.content) {
+          const textContent = content.message.content.find((c: any) => c.type === 'text');
+          if (textContent) return textContent.text.substring(0, 300);
+        }
+        return 'Assistant thinking...';
+      }
+
+      if (content.type === 'user') {
+        if (content.message?.content) {
+          const textContent = content.message.content.find((c: any) => c.type === 'text');
+          if (textContent) return textContent.text.substring(0, 300);
+        }
+        return 'User input';
+      }
+
+      if (content.type === 'result') {
+        return `Tool result: ${JSON.stringify(content).substring(0, 200)}...`;
+      }
+
+      return JSON.stringify(content).substring(0, 200);
+    } catch {
+      return 'Message content';
+    }
+  };
+
+  const getMessageTypeIcon = (type: string): string => {
+    switch (type) {
+      case 'assistant': return '🤖';
+      case 'user': return '👤';
+      case 'result': return '📋';
+      case 'system': return '⚙️';
+      default: return '💬';
+    }
+  };
+
+  const selectedSessionData = selectedSession
+    ? sessions.find(s => s.sessionId === selectedSession)
+    : null;
+  const selectedMessages = selectedSession
+    ? sessionMessages.get(selectedSession) || []
+    : [];
+
+  return (
+    <div style={{
+      width: "100%",
+      height: "100%",
+      display: "flex",
+      flexDirection: "column",
+      background: theme.bg,
+      color: theme.fg,
+      fontFamily: "'Share Tech Mono', monospace",
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: "20px",
+        borderBottom: `1px solid ${theme.dim}`,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      }}>
+        <div>
+          <div style={{ fontSize: "20px", fontWeight: "bold", letterSpacing: "4px" }}>
+            CLAUDE CODE SESSIONS
+          </div>
+          <div style={{ fontSize: "11px", color: theme.dim, marginTop: "4px" }}>
+            {sessions.length} session{sessions.length !== 1 ? 's' : ''} •
+            {sessions.filter(s => s.status === 'active').length} active
+          </div>
+        </div>
+        <button
+          onClick={onBack}
+          style={{
+            background: "transparent",
+            border: `1px solid ${theme.dim}`,
+            color: theme.fg,
+            padding: "8px 16px",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            fontSize: "11px",
+            letterSpacing: "1px",
+          }}
+        >
+          ← BACK TO HOME
+        </button>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* Sessions List (Left Panel) */}
+        <div style={{
+          width: "350px",
+          borderRight: `1px solid ${theme.dim}`,
+          overflowY: "auto",
+          padding: "10px",
+        }}>
+          {sessions.length === 0 ? (
+            <div style={{
+              textAlign: "center",
+              padding: "40px 20px",
+              color: theme.dim,
+            }}>
+              <div style={{ fontSize: "40px", marginBottom: "16px" }}>📦</div>
+              <div>No Claude sessions yet</div>
+              <div style={{ fontSize: "11px", marginTop: "8px" }}>
+                Ask Jarvis to create a coding session
+              </div>
+            </div>
+          ) : (
+            sessions.map((session) => (
+              <div
+                key={session.sessionId}
+                onClick={() => setSelectedSession(session.sessionId)}
+                style={{
+                  padding: "12px",
+                  marginBottom: "8px",
+                  background: selectedSession === session.sessionId ? "#1a1a1a" : "transparent",
+                  border: `1px solid ${selectedSession === session.sessionId ? theme.accent : "#222"}`,
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                }}
+              >
+                <div style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "8px",
+                }}>
+                  <span style={{ color: getStatusColor(session.status), fontSize: "12px" }}>
+                    {getStatusIcon(session.status)} {session.status.toUpperCase()}
+                  </span>
+                  <span style={{ fontSize: "10px", color: theme.dim }}>
+                    {session.sessionId.substring(0, 12)}...
+                  </span>
+                </div>
+                <div style={{
+                  fontSize: "13px",
+                  color: theme.fg,
+                  marginBottom: "6px",
+                  lineHeight: "1.4",
+                }}>
+                  {session.task.length > 80 ? session.task.substring(0, 80) + '...' : session.task}
+                </div>
+                <div style={{ fontSize: "10px", color: theme.dim }}>
+                  {session.filesCreated.length + session.filesModified.length} files changed
+                  {session.prUrl && <span style={{ color: theme.success }}> • PR created</span>}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Session Detail (Right Panel) */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {selectedSessionData ? (
+            <>
+              {/* Session Header */}
+              <div style={{
+                padding: "16px 20px",
+                borderBottom: `1px solid ${theme.dim}`,
+                background: "#0a0a0a",
+              }}>
+                <div style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: "14px", marginBottom: "8px", lineHeight: "1.4" }}>
+                      {selectedSessionData.task}
+                    </div>
+                    <div style={{ display: "flex", gap: "16px", fontSize: "11px", color: theme.dim }}>
+                      <span>
+                        <span style={{ color: getStatusColor(selectedSessionData.status) }}>
+                          {getStatusIcon(selectedSessionData.status)}
+                        </span> {selectedSessionData.status}
+                      </span>
+                      <span>📁 {selectedSessionData.filesCreated.length} created</span>
+                      <span>✏️ {selectedSessionData.filesModified.length} modified</span>
+                      {selectedSessionData.prUrl && (
+                        <a
+                          href={selectedSessionData.prUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: theme.accent, textDecoration: "none" }}
+                        >
+                          🔗 View PR
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Files List */}
+                {(selectedSessionData.filesCreated.length > 0 || selectedSessionData.filesModified.length > 0) && (
+                  <div style={{
+                    marginTop: "12px",
+                    padding: "10px",
+                    background: "#111",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    maxHeight: "100px",
+                    overflowY: "auto",
+                  }}>
+                    {selectedSessionData.filesCreated.map((f, i) => (
+                      <div key={`created-${i}`} style={{ color: theme.success, marginBottom: "2px" }}>
+                        + {f}
+                      </div>
+                    ))}
+                    {selectedSessionData.filesModified.map((f, i) => (
+                      <div key={`modified-${i}`} style={{ color: theme.accent, marginBottom: "2px" }}>
+                        ~ {f}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Messages Stream */}
+              <div style={{
+                flex: 1,
+                overflowY: "auto",
+                padding: "16px 20px",
+                background: "#050505",
+              }}>
+                {selectedMessages.length === 0 ? (
+                  <div style={{ textAlign: "center", color: theme.dim, padding: "40px" }}>
+                    {selectedSessionData.status === 'active'
+                      ? 'Waiting for messages...'
+                      : 'No message history available'}
+                  </div>
+                ) : (
+                  selectedMessages.slice(-50).map((msg, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        marginBottom: "12px",
+                        padding: "10px",
+                        background: msg.type === 'assistant' ? '#0d1117' : '#111',
+                        borderLeft: `3px solid ${msg.type === 'assistant' ? theme.accent : msg.type === 'result' ? theme.success : theme.dim}`,
+                        fontSize: "12px",
+                        lineHeight: "1.5",
+                      }}
+                    >
+                      <div style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        marginBottom: "6px",
+                        fontSize: "10px",
+                        color: theme.dim,
+                      }}>
+                        <span>{getMessageTypeIcon(msg.type)} {msg.type.toUpperCase()}</span>
+                        <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                      </div>
+                      <div style={{ color: "#ccc", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {formatMessageContent(msg)}
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+            </>
+          ) : (
+            <div style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: theme.dim,
+            }}>
+              Select a session to view details
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 function App() {
   // State
   const [wsUrl] = useState(() => localStorage.getItem("jarvis-ws-url") || `ws://${window.location.host}/ws`);
@@ -134,6 +462,12 @@ function App() {
   const [selectedMic, setSelectedMic] = useState<number | null>(null);
   const [showMicSelector, setShowMicSelector] = useState(false);
   const [time, setTime] = useState(new Date());
+
+  // View management state
+  const [currentView, setCurrentView] = useState<ScreenView>("home");
+  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionUpdate[]>([]);
+  const [sessionMessages, setSessionMessages] = useState<Map<string, SessionMessage[]>>(new Map());
+  const [focusedSessionId, setFocusedSessionId] = useState<string | undefined>();
 
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -173,7 +507,11 @@ function App() {
     const loadState = async () => {
       try {
         const url = wsUrl.replace("ws://", "http://").replace("wss://", "https://").replace("/ws", "");
-        const [stateRes, micsRes] = await Promise.all([fetch(`${url}/api/state`), fetch(`${url}/api/microphones`)]);
+        const [stateRes, micsRes, sessionsRes] = await Promise.all([
+          fetch(`${url}/api/state`),
+          fetch(`${url}/api/microphones`),
+          fetch(`${url}/api/claude-sessions`)
+        ]);
         const state: JarvisState = await stateRes.json();
         setStatus(state.status);
         setLogs(state.logs);
@@ -183,7 +521,10 @@ function App() {
         setCurrentProject(state.currentProject);
         setActiveTodos(state.activeTodos);
         if (state.reminders) setReminders(state.reminders);
+        if (state.currentView) setCurrentView(state.currentView);
         setMicrophones(await micsRes.json());
+        const sessions: ClaudeSessionUpdate[] = await sessionsRes.json();
+        setClaudeSessions(sessions);
       } catch (err) {
         console.error("Failed to load state", err);
       }
@@ -210,9 +551,30 @@ function App() {
           setCurrentProject(msg.data.currentProject);
           setActiveTodos(msg.data.activeTodos);
         } else if (msg.type === "reminders-update") {
-            setReminders(msg.data.reminders);
+          setReminders(msg.data.reminders);
         } else if (msg.type === "system-stats") {
-            setSystemStats(msg.data);
+          setSystemStats(msg.data);
+        } else if (msg.type === "screen-control") {
+          // Server is telling us to change view
+          setCurrentView(msg.data.view);
+          if (msg.data.sessionId) {
+            setFocusedSessionId(msg.data.sessionId);
+          }
+          // Request sessions data when switching to sessions view
+          if (msg.data.view === "claude-sessions" || msg.data.view === "split") {
+            ws.current?.send(JSON.stringify({ type: "request-claude-sessions" }));
+          }
+        } else if (msg.type === "claude-sessions-update") {
+          // Update the sessions list
+          setClaudeSessions(msg.data.sessions);
+        } else if (msg.type === "claude-session-message") {
+          // Append new message to the session
+          setSessionMessages(prev => {
+            const newMap = new Map(prev);
+            const existing = newMap.get(msg.data.sessionId) || [];
+            newMap.set(msg.data.sessionId, [...existing, msg.data.message]);
+            return newMap;
+          });
         }
       };
     };
@@ -224,6 +586,15 @@ function App() {
       setSelectedMic(micIndex);
       ws.current?.send(JSON.stringify({ type: "change-microphone", microphoneIndex: micIndex }));
       setShowMicSelector(false);
+  };
+
+  // Handle view changes from the UI
+  const handleViewChange = (view: ScreenView) => {
+    setCurrentView(view);
+    ws.current?.send(JSON.stringify({ type: "set-view", view }));
+    if (view === "claude-sessions" || view === "split") {
+      ws.current?.send(JSON.stringify({ type: "request-claude-sessions" }));
+    }
   };
 
   const formatUptime = (sec: number) => {
@@ -242,6 +613,20 @@ function App() {
     success: "#00ff88"
   };
 
+  // If we're showing the Claude Sessions view, render that instead
+  if (currentView === "claude-sessions") {
+    return (
+      <ClaudeSessionsView
+        sessions={claudeSessions}
+        sessionMessages={sessionMessages}
+        focusedSessionId={focusedSessionId}
+        onBack={() => handleViewChange("home")}
+        theme={theme}
+      />
+    );
+  }
+
+  // Home view (default)
   return (
     <div style={{
       width: "100vw", height: "100vh", overflow: "hidden",
@@ -250,7 +635,7 @@ function App() {
       position: "relative",
       display: "flex", justifyContent: "center", alignItems: "center"
     }}>
-      
+
       {/* Top Header - Previous Style */}
       <div style={{
           position: "absolute", top: 40, left: 40, right: 40,
@@ -264,6 +649,28 @@ function App() {
                <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: isConnected ? theme.success : theme.warn }} />
                {isConnected ? "SYSTEM ONLINE" : "OFFLINE"}
             </div>
+            {/* View switcher button */}
+            {claudeSessions.length > 0 && (
+              <button
+                onClick={() => handleViewChange("claude-sessions")}
+                style={{
+                  marginTop: "12px",
+                  background: "transparent",
+                  border: `1px solid ${claudeSessions.some(s => s.status === 'active') ? theme.accent : theme.dim}`,
+                  color: claudeSessions.some(s => s.status === 'active') ? theme.accent : theme.fg,
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontSize: "10px",
+                  letterSpacing: "1px",
+                }}
+              >
+                {claudeSessions.filter(s => s.status === 'active').length > 0
+                  ? `⚡ ${claudeSessions.filter(s => s.status === 'active').length} ACTIVE SESSION${claudeSessions.filter(s => s.status === 'active').length !== 1 ? 'S' : ''}`
+                  : `📦 ${claudeSessions.length} SESSION${claudeSessions.length !== 1 ? 'S' : ''}`
+                }
+              </button>
+            )}
          </div>
 
          {/* Right: Time & Mic */}
@@ -271,7 +678,7 @@ function App() {
              <div style={{ fontSize: "24px", color: "#fff", letterSpacing: "2px" }}>
                 {time.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
              </div>
-             <div 
+             <div
                onClick={() => setShowMicSelector(!showMicSelector)}
                style={{ fontSize: "11px", color: theme.dim, letterSpacing: "1px", cursor: "pointer", marginTop: "4px" }}
              >

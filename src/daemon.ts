@@ -1,11 +1,13 @@
 import type { ServerWebSocket } from "bun";
 import { JarvisEngine, type JarvisEvent, type JarvisStatus } from "./jarvis-engine";
-import type { ServerMessage, ClientMessage, JarvisState } from "./types/websocket";
+import type { ServerMessage, ClientMessage, JarvisState, ScreenView, ClaudeSessionUpdate } from "./types/websocket";
 import { memory } from "./memory";
 import { reminders } from "./memory/reminders";
 import { TextToSpeech } from "./tts";
 import { listMicrophones } from "./list-microphones";
 import { killExistingInstances } from "./utils/kill-existing";
+import { setScreenControlCallback } from "./tools/screen-control";
+import { claudeAgentManager } from "./claude-agent/manager";
 import { spawn, type ChildProcess } from "child_process";
 import { join } from "path";
 import * as os from "os";
@@ -61,7 +63,53 @@ let jarvisState: JarvisState = {
   currentProject: null,
   activeTodos: [],
   reminders: [],
+  currentView: "home",
 };
+
+// Screen control function - called by the showOnScreen tool
+function changeScreenView(view: ScreenView, sessionId?: string) {
+  jarvisState.currentView = view;
+
+  // Broadcast screen control message to all clients
+  broadcast({
+    type: "screen-control",
+    data: { view, sessionId },
+  });
+
+  addLog(`Screen view changed to: ${view}${sessionId ? ` (session: ${sessionId})` : ''}`);
+
+  // If switching to claude-sessions view, also send the current sessions
+  if (view === "claude-sessions" || view === "split") {
+    broadcastClaudeSessions();
+  }
+}
+
+// Set up the screen control callback for the tool
+setScreenControlCallback(changeScreenView);
+
+// Broadcast current Claude sessions to all clients
+async function broadcastClaudeSessions() {
+  const sessions = await claudeAgentManager.listSessions(false); // Get all sessions
+
+  const sessionUpdates: ClaudeSessionUpdate[] = sessions.map(s => ({
+    sessionId: s.session_id,
+    status: s.status,
+    task: s.task,
+    latestMessage: s.messages.length > 0 ? {
+      type: s.messages[s.messages.length - 1].type,
+      content: JSON.stringify(s.messages[s.messages.length - 1].content).substring(0, 500),
+      timestamp: s.messages[s.messages.length - 1].timestamp,
+    } : undefined,
+    filesModified: s.files_modified,
+    filesCreated: s.files_created,
+    prUrl: s.jarvis_metadata.pr_url,
+  }));
+
+  broadcast({
+    type: "claude-sessions-update",
+    data: { sessions: sessionUpdates },
+  });
+}
 
 // Initialize Jarvis Engine
 const apiKey = process.env.GROQ_API_KEY;
@@ -215,6 +263,39 @@ await updateProjectData();
 await updateRemindersData();
 console.log("Jarvis engine started");
 
+// Initialize Claude Agent Manager and subscribe to session events
+await claudeAgentManager.init();
+claudeAgentManager.onSessionEvent((event) => {
+  console.log(`📦 Claude session event: ${event.type} for session ${event.sessionId}`);
+
+  // If we're in claude-sessions or split view, broadcast updates
+  if (jarvisState.currentView === "claude-sessions" || jarvisState.currentView === "split") {
+    if (event.message) {
+      // Broadcast individual message
+      broadcast({
+        type: "claude-session-message",
+        data: {
+          sessionId: event.sessionId,
+          message: event.message,
+        },
+      });
+    }
+
+    // Also broadcast the full session update
+    broadcastClaudeSessions();
+  }
+
+  // Log session events
+  if (event.type === 'session-created') {
+    addLog(`🚀 Claude session created: ${event.session?.task}`);
+  } else if (event.type === 'session-completed') {
+    addLog(`✅ Claude session completed: ${event.session?.task}`);
+  } else if (event.type === 'session-error') {
+    addLog(`❌ Claude session error: ${event.session?.error_message}`);
+  }
+});
+console.log("Claude Agent Manager initialized");
+
 // Start keyboard listener if in keyboard or both modes
 if (activationMode === "keyboard" || activationMode === "both") {
   console.log("Starting keyboard listener...");
@@ -293,6 +374,24 @@ const server = Bun.serve({
       return Response.json(mics);
     }
 
+    if (url.pathname === "/api/claude-sessions") {
+      const sessions = await claudeAgentManager.listSessions(false);
+      const sessionUpdates: ClaudeSessionUpdate[] = sessions.map(s => ({
+        sessionId: s.session_id,
+        status: s.status,
+        task: s.task,
+        latestMessage: s.messages.length > 0 ? {
+          type: s.messages[s.messages.length - 1].type,
+          content: JSON.stringify(s.messages[s.messages.length - 1].content).substring(0, 500),
+          timestamp: s.messages[s.messages.length - 1].timestamp,
+        } : undefined,
+        filesModified: s.files_modified,
+        filesCreated: s.files_created,
+        prUrl: s.jarvis_metadata.pr_url,
+      }));
+      return Response.json(sessionUpdates);
+    }
+
     // Serve bundled JS
     if (url.pathname === "/app.js") {
       return new Response(Bun.file("dist/app.js"), {
@@ -329,6 +428,14 @@ const server = Bun.serve({
           event: { type: "status", data: jarvisState.status },
         } satisfies ServerMessage)
       );
+
+      // Send current view
+      ws.send(
+        JSON.stringify({
+          type: "screen-control",
+          data: { view: jarvisState.currentView || "home" },
+        } satisfies ServerMessage)
+      );
     },
 
     async message(ws, message) {
@@ -340,7 +447,7 @@ const server = Bun.serve({
           ws.send(JSON.stringify({ type: "connected", data: { timestamp: new Date().toISOString() } }));
         } else if (data.type === "change-microphone") {
           await jarvis.updateMicrophone(data.microphoneIndex);
-          
+
           // Save to memory as preferred microphone
           if (data.microphoneIndex !== null) {
             const mics = await listMicrophones();
@@ -356,11 +463,17 @@ const server = Bun.serve({
             await memory.setPreferredMicrophone(null, null);
             addLog(`Microphone changed to default`);
           }
-          
+
           broadcast({
             type: "jarvis-event",
             event: { type: "log", data: `Microphone updated` },
           });
+        } else if (data.type === "request-claude-sessions") {
+          // Client is requesting current Claude sessions
+          broadcastClaudeSessions();
+        } else if (data.type === "set-view") {
+          // Client is manually changing the view
+          changeScreenView(data.view);
         }
       } catch (error) {
         console.error("Error parsing client message:", error);

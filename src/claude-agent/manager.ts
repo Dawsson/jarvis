@@ -13,10 +13,40 @@ import { getCurrentRepository, getRepositoryByName } from './repository';
 import { autoCreatePR } from './pr-utils';
 import { randomBytes } from 'crypto';
 
+// Event types for real-time updates
+export type SessionEventType = 'session-created' | 'session-updated' | 'session-completed' | 'session-error' | 'session-message';
+
+export interface SessionEvent {
+  type: SessionEventType;
+  sessionId: string;
+  session?: JarvisClaudeSession;
+  message?: SessionMessage;
+}
+
+type SessionEventHandler = (event: SessionEvent) => void;
+
 class ClaudeAgentManager {
   private sessions: Map<string, JarvisClaudeSession> = new Map();
   private activeStreams: Map<string, Query> = new Map();
   private initialized = false;
+  private eventHandlers: Set<SessionEventHandler> = new Set();
+
+  // Subscribe to session events
+  onSessionEvent(handler: SessionEventHandler) {
+    this.eventHandlers.add(handler);
+    return () => this.eventHandlers.delete(handler);
+  }
+
+  // Emit session events
+  private emitEvent(event: SessionEvent) {
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(event);
+      } catch (error) {
+        console.error('Error in session event handler:', error);
+      }
+    }
+  }
 
   async init() {
     if (this.initialized) return;
@@ -92,6 +122,13 @@ class ClaudeAgentManager {
     this.sessions.set(sessionId, session);
     await saveSessionMetadata(session);
 
+    // Emit session created event
+    this.emitEvent({
+      type: 'session-created',
+      sessionId,
+      session,
+    });
+
     // Start streaming in background
     this.startSessionStream(sessionId, task, cwd);
 
@@ -164,6 +201,14 @@ class ClaudeAgentManager {
 
     session.updated_at = new Date().toISOString();
     await updateSessionMetadata(session);
+
+    // Emit session message event for real-time updates
+    this.emitEvent({
+      type: 'session-message',
+      sessionId,
+      session,
+      message: sessionMessage,
+    });
   }
 
   private trackFileOperations(session: JarvisClaudeSession, message: any) {
@@ -209,6 +254,19 @@ class ClaudeAgentManager {
     }
 
     await updateSessionMetadata(session);
+
+    // Emit appropriate event based on status
+    const eventType: SessionEventType = status === 'completed'
+      ? 'session-completed'
+      : status === 'error'
+        ? 'session-error'
+        : 'session-updated';
+
+    this.emitEvent({
+      type: eventType,
+      sessionId,
+      session,
+    });
   }
 
   private generateVoiceSummary(session: JarvisClaudeSession): string {

@@ -20,3 +20,8 @@ export {
   sendToClaudeSessionTool,
   listClaudeSessionsTool
 } from './claude-agent';
+export {
+  showOnScreenTool,
+  getCurrentViewTool,
+  setScreenControlCallback
+} from './screen-control';
