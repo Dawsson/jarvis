@@ -3,15 +3,15 @@ import { z } from 'zod';
 import { claudeAgentManager } from '../claude-agent/manager';
 
 export const createClaudeSessionTool: Tool = {
-  description: 'Create a new Claude Agent SDK session for coding tasks. Use this when the user asks to create a coding session, delegate work to Claude, or start working on a technical task. The repository is automatically selected based on the current project context.',
+  description: 'Create a new Claude Agent SDK session for coding tasks. ALWAYS creates a git worktree and automatically opens a PR when complete. Use this when the user asks to create a coding session, delegate work to Claude, or start working on a technical task. The repository is automatically selected based on the current project context.',
   inputSchema: z.object({
     task: z.string().describe('The coding task description'),
     repositoryName: z.string().optional().describe('Repository name to use (e.g., "jarvis", "cookify"). Defaults to current project.'),
     cwd: z.string().optional().describe('Working directory (defaults to repository path)'),
-    useWorktree: z.boolean().optional().describe('Create isolated git worktree'),
+    useWorktree: z.boolean().optional().default(true).describe('Create isolated git worktree (default: true). Set to false to work directly in repo.'),
     worktreeName: z.string().optional().describe('Name for worktree branch'),
   }),
-  execute: async ({ task, repositoryName, cwd, useWorktree, worktreeName }) => {
+  execute: async ({ task, repositoryName, cwd, useWorktree = true, worktreeName }) => {
     try {
       const sessionId = await claudeAgentManager.createSession(task, {
         repositoryName,
@@ -156,7 +156,7 @@ export const sendToClaudeSessionTool: Tool = {
 export const listClaudeSessionsTool: Tool = {
   description: 'List all Claude Agent SDK sessions. Use this when the user asks to see their coding sessions or wants an overview.',
   inputSchema: z.object({
-    activeOnly: z.boolean().optional().describe('Show only active sessions (default: true)'),
+    activeOnly: z.coerce.boolean().optional().describe('Show only active sessions (default: true)'),
   }),
   execute: async ({ activeOnly = true }) => {
     try {

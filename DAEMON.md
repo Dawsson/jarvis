@@ -12,14 +12,14 @@ bun run daemon
 
 The daemon will:
 - Start the Jarvis engine with wake word detection
-- Launch a WebSocket server on port 3000
-- Serve a web interface at http://localhost:3000
+- Launch a WebSocket server on port 7777
+- Serve a web interface at http://localhost:7777
 
 ### 2. Access the Web Interface
 
 Open your browser and go to:
 ```
-http://localhost:3000
+http://localhost:7777
 ```
 
 You'll see a sleek, Apple-inspired interface showing:
@@ -36,7 +36,7 @@ You'll see a sleek, Apple-inspired interface showing:
 The web interface allows you to configure the WebSocket URL, making it perfect for Tailscale setups:
 
 1. Click the **⚙️ Configure** button in the top right
-2. Enter your WebSocket URL (e.g., `ws://macbook.tailnet-name.ts.net:3000/ws`)
+2. Enter your WebSocket URL (e.g., `ws://macbook.tailnet-name.ts.net:7777/ws`)
 3. Click **Save**
 
 The URL is saved in localStorage, so you only need to set it once per browser.
@@ -81,19 +81,19 @@ bun run daemon
 
 On your other computer, open a browser and go to:
 ```
-http://macbook.tailnet-name.ts.net:3000
+http://macbook.tailnet-name.ts.net:7777
 ```
 
 Or use the Tailscale IP directly:
 ```
-http://100.x.x.x:3000
+http://100.x.x.x:7777
 ```
 
 ### 5. Configure the WebSocket URL
 
 In the web interface:
 1. Click **⚙️ Configure**
-2. Set the WebSocket URL to: `ws://macbook.tailnet-name.ts.net:3000/ws`
+2. Set the WebSocket URL to: `ws://macbook.tailnet-name.ts.net:7777/ws`
 3. Click **Save**
 
 The interface will now connect to your Mac's Jarvis daemon via Tailscale!
@@ -189,7 +189,7 @@ launchctl load ~/Library/LaunchAgents/com.jarvis.daemon.plist
          ▼
 ┌─────────────────┐
 │  Bun Server     │
-│  :3000          │
+│  :7777          │
 ├─────────────────┤
 │  • HTTP Routes  │
 │  • WebSocket    │
@@ -217,16 +217,16 @@ launchctl load ~/Library/LaunchAgents/com.jarvis.daemon.plist
 
 ### Port Already in Use
 
-If port 3000 is already in use:
+If port 7777 is already in use:
 ```bash
-lsof -ti:3000 | xargs kill
+lsof -ti:7777 | xargs kill
 ```
 
 ### WebSocket Connection Failed
 
 1. Check that the daemon is running
 2. Verify the WebSocket URL is correct
-3. Make sure firewall allows port 3000
+3. Make sure firewall allows port 7777
 4. For Tailscale, ensure both devices are connected
 
 ### Microphone Not Working

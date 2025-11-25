@@ -269,7 +269,8 @@ WORKFLOW:
 1. If user needs tools (datetime, listTodos, volume, spotify commands, etc), you MUST call them first
 2. NEVER claim to have done something without actually calling the tool
 3. For volume commands ("set volume to X", "volume to X%", etc), you MUST call the volume tool
-4. After tool execution, return ONE JSON object (not an array!)
+4. For coding sessions ("create a session", "open a PR", "build X feature"), use createClaudeSession tool - it automatically creates a git worktree and opens a PR when complete
+5. After tool execution, return ONE JSON object (not an array!)
 
 SPEECH RULES:
 - speechText should sound natural when spoken aloud
@@ -578,6 +579,41 @@ Default to expectFollowUp=false unless absolutely necessary.`,
     } else {
       console.log("❌ [JarvisEngine] ERROR: wakeWordDetector stdin not available");
       this.emit({ type: "error", data: "Cannot send STOP_RECORDING - wakeWordDetector stdin not available" });
+    }
+  }
+
+  // Process text input directly (bypass speech recognition)
+  async processTextInput(text: string): Promise<void> {
+    console.log(`⌨️ [JarvisEngine] Processing text input: "${text}"`);
+    this.updateStatus("processing");
+    this.emit({ type: "log", data: `Processing text: ${text}` });
+    this.emit({ type: "transcription", data: text });
+
+    try {
+      // Save user message to conversation history
+      await conversationHistory.add('user', text);
+
+      // Generate AI response with tools
+      this.emit({ type: "log", data: "Generating AI response..." });
+      const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(text);
+
+      // Save assistant response to conversation history
+      await conversationHistory.add('assistant', displayText);
+
+      this.emit({ type: "response", data: displayText });
+      this.emit({ type: "log", data: "Response generated" });
+
+      // Speak the response
+      this.emit({ type: "log", data: "Speaking response..." });
+      await this.tts.speak(speechText);
+      this.emit({ type: "log", data: "Speech complete" });
+
+      // Return to listening state
+      this.updateStatus(expectsFollowUp ? "listening" : "idle");
+    } catch (error: any) {
+      console.error("❌ [JarvisEngine] Error processing text input:", error);
+      this.emit({ type: "error", data: error.message });
+      this.updateStatus("idle");
     }
   }
 }

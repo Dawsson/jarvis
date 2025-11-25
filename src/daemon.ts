@@ -395,6 +395,40 @@ if (activationMode === "voice") {
   console.log(`🎤 Listening for wake word or keyboard activation...`);
 }
 
+// Setup text input interface for typing to Jarvis
+console.log(`💬 Type your message and press Enter to talk to Jarvis\n`);
+
+const textInputInterface = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  prompt: '> ',
+});
+
+textInputInterface.prompt();
+
+textInputInterface.on('line', async (line: string) => {
+  const input = line.trim();
+
+  if (input.length === 0) {
+    textInputInterface.prompt();
+    return;
+  }
+
+  // Process the text input through Jarvis
+  try {
+    await jarvis.processTextInput(input);
+  } catch (error: any) {
+    console.error('❌ Error processing text input:', error.message);
+  }
+
+  textInputInterface.prompt();
+});
+
+textInputInterface.on('close', () => {
+  console.log('\n👋 Goodbye!');
+  process.exit(0);
+});
+
 // System stats checker - runs every 2 seconds
 // Use global to track interval across module reloads
 declare global {
