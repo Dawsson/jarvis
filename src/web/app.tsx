@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import type { ServerMessage, JarvisState, ScreenView, ClaudeSessionUpdate } from "../types/websocket";
+import type { ServerMessage, JarvisState, ScreenView, CodeSessionUpdate } from "../types/websocket";
 import type { JarvisStatus } from "../jarvis-engine";
 import type { SessionMessage } from "../claude-agent/types";
 import { Reactor } from "./components/Reactor";
 import { StatDisplay } from "./components/StatDisplay";
-import { ClaudeSessionsView } from "./components/ClaudeSessionsView";
+import { CodeSessionsView } from "./components/CodeSessionsView";
 import { Header } from "./components/Header";
 import { MainView } from "./components/MainView";
 import { SystemLogsPanel } from "./components/SystemLogsPanel";
@@ -33,7 +33,7 @@ function App() {
 
   // View management state
   const [currentView, setCurrentView] = useState<ScreenView>("home");
-  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionUpdate[]>([]);
+  const [codeSessions, setCodeSessions] = useState<CodeSessionUpdate[]>([]);
   const [sessionMessages, setSessionMessages] = useState<Map<string, SessionMessage[]>>(new Map());
   const [focusedSessionId, setFocusedSessionId] = useState<string | undefined>();
 
@@ -78,7 +78,7 @@ function App() {
         const [stateRes, micsRes, sessionsRes] = await Promise.all([
           fetch(`${url}/api/state`),
           fetch(`${url}/api/microphones`),
-          fetch(`${url}/api/claude-sessions`)
+          fetch(`${url}/api/code-sessions`)
         ]);
         const state: JarvisState = await stateRes.json();
         setStatus(state.status);
@@ -91,8 +91,8 @@ function App() {
         if (state.reminders) setReminders(state.reminders);
         if (state.currentView) setCurrentView(state.currentView);
         setMicrophones(await micsRes.json());
-        const sessions: ClaudeSessionUpdate[] = await sessionsRes.json();
-        setClaudeSessions(sessions);
+        const sessions: CodeSessionUpdate[] = await sessionsRes.json();
+        setCodeSessions(sessions);
       } catch (err) {
         console.error("Failed to load state", err);
       }
@@ -127,12 +127,12 @@ function App() {
           if (msg.data.sessionId) {
             setFocusedSessionId(msg.data.sessionId);
           }
-          if (msg.data.view === "claude-sessions" || msg.data.view === "split") {
-            ws.current?.send(JSON.stringify({ type: "request-claude-sessions" }));
+          if (msg.data.view === "code-sessions" || msg.data.view === "split") {
+            ws.current?.send(JSON.stringify({ type: "request-code-sessions" }));
           }
-        } else if (msg.type === "claude-sessions-update") {
-          setClaudeSessions(msg.data.sessions);
-        } else if (msg.type === "claude-session-message") {
+        } else if (msg.type === "code-sessions-update") {
+          setCodeSessions(msg.data.sessions);
+        } else if (msg.type === "code-session-message") {
           setSessionMessages(prev => {
             const newMap = new Map(prev);
             const existing = newMap.get(msg.data.sessionId) || [];
@@ -155,8 +155,8 @@ function App() {
   const handleViewChange = (view: ScreenView) => {
     setCurrentView(view);
     ws.current?.send(JSON.stringify({ type: "set-view", view }));
-    if (view === "claude-sessions" || view === "split") {
-      ws.current?.send(JSON.stringify({ type: "request-claude-sessions" }));
+    if (view === "code-sessions" || view === "split") {
+      ws.current?.send(JSON.stringify({ type: "request-code-sessions" }));
     }
   };
 
@@ -175,18 +175,18 @@ function App() {
     success: "#00ff88"
   };
 
-  if (currentView === "claude-sessions") {
+  if (currentView === "code-sessions") {
     return (
       <>
         <style>{`
-          .claude-sessions-scrollable::-webkit-scrollbar { width: 6px; height: 6px; }
-          .claude-sessions-scrollable::-webkit-scrollbar-track { background: #0a0a0a; }
-          .claude-sessions-scrollable::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-          .claude-sessions-scrollable::-webkit-scrollbar-thumb:hover { background: #555; }
+          .code-sessions-scrollable::-webkit-scrollbar { width: 6px; height: 6px; }
+          .code-sessions-scrollable::-webkit-scrollbar-track { background: #0a0a0a; }
+          .code-sessions-scrollable::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+          .code-sessions-scrollable::-webkit-scrollbar-thumb:hover { background: #555; }
         `}</style>
         <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
-          <ClaudeSessionsView
-            sessions={claudeSessions}
+          <CodeSessionsView
+            sessions={codeSessions}
             sessionMessages={sessionMessages}
             focusedSessionId={focusedSessionId}
             onBack={() => handleViewChange("home")}
@@ -209,7 +209,7 @@ function App() {
       <Header
         isConnected={isConnected}
         theme={theme}
-        claudeSessions={claudeSessions}
+        codeSessions={codeSessions}
         time={time}
         selectedMic={selectedMic}
         onViewChange={handleViewChange}

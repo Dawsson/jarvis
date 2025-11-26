@@ -1,7 +1,7 @@
-# Claude Code Sessions UI
+# Code Sessions UI
 
 ## Overview
-The Claude Code Sessions view provides a full-screen interface for monitoring and reviewing Claude Agent SDK sessions created by Jarvis.
+The Code Sessions view provides a full-screen interface for monitoring and reviewing Claude Agent SDK sessions created by Jarvis.
 
 ## Features
 
@@ -72,7 +72,7 @@ The messages/logs area has been optimized for scrollability:
 ## Usage
 
 ### Accessing the View
-1. When Claude sessions are active, a button appears on the home screen
+1. When code sessions are active, a button appears on the home screen
 2. Click "⚡ X ACTIVE SESSIONS" to view the sessions interface
 3. Or navigate via voice command: "Show me the coding sessions"
 

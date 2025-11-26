@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { JarvisEngine, type JarvisEvent, type JarvisStatus } from "./jarvis-engine";
-import type { ServerMessage, ClientMessage, JarvisState, ScreenView, ClaudeSessionUpdate } from "./types/websocket";
+import type { ServerMessage, ClientMessage, JarvisState, ScreenView, CodeSessionUpdate } from "./types/websocket";
 import { memory } from "./memory";
 import { reminders } from "./memory/reminders";
 import { TextToSpeech } from "./tts";
@@ -86,20 +86,20 @@ function changeScreenView(view: ScreenView, sessionId?: string) {
 
   addLog(`Screen view changed to: ${view}${sessionId ? ` (session: ${sessionId})` : ''}`);
 
-  // If switching to claude-sessions view, also send the current sessions
-  if (view === "claude-sessions" || view === "split") {
-    broadcastClaudeSessions();
+  // If switching to code-sessions view, also send the current sessions
+  if (view === "code-sessions" || view === "split") {
+    broadcastCodeSessions();
   }
 }
 
 // Set up the screen control callback for the tool
 setScreenControlCallback(changeScreenView);
 
-// Broadcast current Claude sessions to all clients
-async function broadcastClaudeSessions() {
+// Broadcast current code sessions to all clients
+async function broadcastCodeSessions() {
   const sessions = await claudeAgentManager.listSessions(false); // Get all sessions
 
-  const sessionUpdates: ClaudeSessionUpdate[] = sessions.map(s => ({
+  const sessionUpdates: CodeSessionUpdate[] = sessions.map(s => ({
     sessionId: s.session_id,
     status: s.status,
     task: s.task,
@@ -115,7 +115,7 @@ async function broadcastClaudeSessions() {
   }));
 
   broadcast({
-    type: "claude-sessions-update",
+    type: "code-sessions-update",
     data: { sessions: sessionUpdates },
   });
 }
@@ -286,12 +286,12 @@ await claudeAgentManager.init();
 claudeAgentManager.onSessionEvent((event) => {
   console.log(`📦 Claude session event: ${event.type} for session ${event.sessionId}`);
 
-  // If we're in claude-sessions or split view, broadcast updates
-  if (jarvisState.currentView === "claude-sessions" || jarvisState.currentView === "split") {
+  // If we're in code-sessions or split view, broadcast updates
+  if (jarvisState.currentView === "code-sessions" || jarvisState.currentView === "split") {
     if (event.message) {
       // Broadcast individual message
       broadcast({
-        type: "claude-session-message",
+        type: "code-session-message",
         data: {
           sessionId: event.sessionId,
           message: event.message,
@@ -392,9 +392,9 @@ const server = Bun.serve({
       return Response.json(mics);
     }
 
-    if (url.pathname === "/api/claude-sessions") {
+    if (url.pathname === "/api/code-sessions") {
       const sessions = await claudeAgentManager.listSessions(false);
-      const sessionUpdates: ClaudeSessionUpdate[] = sessions.map(s => ({
+      const sessionUpdates: CodeSessionUpdate[] = sessions.map(s => ({
         sessionId: s.session_id,
         status: s.status,
         task: s.task,
@@ -412,7 +412,7 @@ const server = Bun.serve({
     }
 
     // Get detailed code review for a specific session
-    if (url.pathname.startsWith("/api/claude-sessions/") && url.pathname.endsWith("/code-review")) {
+    if (url.pathname.startsWith("/api/code-sessions/") && url.pathname.endsWith("/code-review")) {
       const sessionId = url.pathname.split("/")[3];
       const session = await claudeAgentManager.getSession(sessionId);
 
@@ -513,9 +513,9 @@ const server = Bun.serve({
             type: "jarvis-event",
             event: { type: "log", data: `Microphone updated` },
           });
-        } else if (data.type === "request-claude-sessions") {
-          // Client is requesting current Claude sessions
-          broadcastClaudeSessions();
+        } else if (data.type === "request-code-sessions") {
+          // Client is requesting current code sessions
+          broadcastCodeSessions();
         } else if (data.type === "set-view") {
           // Client is manually changing the view
           changeScreenView(data.view);
