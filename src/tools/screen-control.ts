@@ -13,13 +13,13 @@ export function setScreenControlCallback(callback: ScreenControlCallback) {
 }
 
 export const showOnScreenTool: Tool = {
-  description: 'Control what is displayed on the JARVIS web interface. Use this to show Claude Code sessions, return to home view, or display a split view. Call this when the user asks to see coding sessions, check on Claude, view the dashboard, or go back to home.',
+  description: 'Control what is displayed on the JARVIS web interface. Use this to show code sessions, return to home view, or display a split view. Call this when the user asks to see coding sessions, check on coding progress, view the dashboard, or go back to home.',
   inputSchema: z.object({
-    view: z.enum(['home', 'claude-sessions', 'split']).describe(
-      'The view to display: "home" for the main reactor dashboard, "claude-sessions" to show active Claude Code sessions, or "split" to show both side by side'
+    view: z.enum(['home', 'code-sessions', 'split']).describe(
+      'The view to display: "home" for the main reactor dashboard, "code-sessions" to show active code sessions, or "split" to show both side by side'
     ),
     sessionId: z.string().optional().describe(
-      'Optional: Focus on a specific session ID when showing claude-sessions view'
+      'Optional: Focus on a specific session ID when showing code-sessions view'
     ),
   }),
   execute: async ({ view, sessionId }: { view: ScreenView; sessionId?: string }) => {
@@ -35,7 +35,7 @@ export const showOnScreenTool: Tool = {
 
       const viewDescriptions: Record<ScreenView, string> = {
         'home': 'the main dashboard',
-        'claude-sessions': 'the Claude Code sessions view',
+        'code-sessions': 'the code sessions view',
         'split': 'a split view with dashboard and sessions',
       };
 

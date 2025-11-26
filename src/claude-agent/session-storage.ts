@@ -4,8 +4,8 @@ import { existsSync } from 'fs';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { JarvisClaudeSession, SessionMessage } from './types';
 
-// Store sessions in the project's .memory folder instead of ~/.claude
-const SESSIONS_DIR = join(process.cwd(), '.memory', 'claude-sessions');
+// Store sessions in the project's .memory folder
+const SESSIONS_DIR = join(process.cwd(), '.memory', 'code-sessions');
 
 export async function initSessionStorage() {
   if (!existsSync(SESSIONS_DIR)) {

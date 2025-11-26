@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import type { ServerMessage, JarvisState, ScreenView, ClaudeSessionUpdate } from "../types/websocket";
+import type { ServerMessage, JarvisState, ScreenView, CodeSessionUpdate } from "../types/websocket";
 import type { JarvisStatus } from "../jarvis-engine";
 import type { SessionMessage } from "../claude-agent/types";
 import { diffLines, type Change } from "diff";
@@ -175,15 +175,15 @@ const DiffViewer = ({ fileOp, theme }: { fileOp: FileOperation, theme: any }) =>
   );
 };
 
-// 4. Claude Sessions View Component
-const ClaudeSessionsView = ({
+// 4. Code Sessions View Component
+const CodeSessionsView = ({
   sessions,
   sessionMessages,
   focusedSessionId,
   onBack,
   theme
 }: {
-  sessions: ClaudeSessionUpdate[];
+  sessions: CodeSessionUpdate[];
   sessionMessages: Map<string, SessionMessage[]>;
   focusedSessionId?: string;
   onBack: () => void;
@@ -222,7 +222,7 @@ const ClaudeSessionsView = ({
     if (selectedSession) {
       setCodeReview(null); // Reset while loading
       setSelectedFileOp(null);
-      fetch(`/api/claude-sessions/${selectedSession}/code-review`)
+      fetch(`/api/code-sessions/${selectedSession}/code-review`)
         .then(res => res.json())
         .then(data => {
           if (data.codeReview) {
@@ -332,7 +332,7 @@ const ClaudeSessionsView = ({
             JARVIS
           </div>
           <div style={{ fontSize: "12px", color: theme.accent, letterSpacing: "2px", opacity: 0.8 }}>
-            // CLOUD CODE SESSIONS
+            // CODE SESSIONS
           </div>
         </div>
         
@@ -571,7 +571,7 @@ function App() {
 
   // View management state
   const [currentView, setCurrentView] = useState<ScreenView>("home");
-  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionUpdate[]>([]);
+  const [codeSessions, setCodeSessions] = useState<CodeSessionUpdate[]>([]);
   const [sessionMessages, setSessionMessages] = useState<Map<string, SessionMessage[]>>(new Map());
   const [focusedSessionId, setFocusedSessionId] = useState<string | undefined>();
 
@@ -616,7 +616,7 @@ function App() {
         const [stateRes, micsRes, sessionsRes] = await Promise.all([
           fetch(`${url}/api/state`),
           fetch(`${url}/api/microphones`),
-          fetch(`${url}/api/claude-sessions`)
+          fetch(`${url}/api/code-sessions`)
         ]);
         const state: JarvisState = await stateRes.json();
         setStatus(state.status);
@@ -629,8 +629,8 @@ function App() {
         if (state.reminders) setReminders(state.reminders);
         if (state.currentView) setCurrentView(state.currentView);
         setMicrophones(await micsRes.json());
-        const sessions: ClaudeSessionUpdate[] = await sessionsRes.json();
-        setClaudeSessions(sessions);
+        const sessions: CodeSessionUpdate[] = await sessionsRes.json();
+        setCodeSessions(sessions);
       } catch (err) {
         console.error("Failed to load state", err);
       }
@@ -665,12 +665,12 @@ function App() {
           if (msg.data.sessionId) {
             setFocusedSessionId(msg.data.sessionId);
           }
-          if (msg.data.view === "claude-sessions" || msg.data.view === "split") {
-            ws.current?.send(JSON.stringify({ type: "request-claude-sessions" }));
+          if (msg.data.view === "code-sessions" || msg.data.view === "split") {
+            ws.current?.send(JSON.stringify({ type: "request-code-sessions" }));
           }
-        } else if (msg.type === "claude-sessions-update") {
-          setClaudeSessions(msg.data.sessions);
-        } else if (msg.type === "claude-session-message") {
+        } else if (msg.type === "code-sessions-update") {
+          setCodeSessions(msg.data.sessions);
+        } else if (msg.type === "code-session-message") {
           setSessionMessages(prev => {
             const newMap = new Map(prev);
             const existing = newMap.get(msg.data.sessionId) || [];
@@ -693,8 +693,8 @@ function App() {
   const handleViewChange = (view: ScreenView) => {
     setCurrentView(view);
     ws.current?.send(JSON.stringify({ type: "set-view", view }));
-    if (view === "claude-sessions" || view === "split") {
-      ws.current?.send(JSON.stringify({ type: "request-claude-sessions" }));
+    if (view === "code-sessions" || view === "split") {
+      ws.current?.send(JSON.stringify({ type: "request-code-sessions" }));
     }
   };
 
@@ -713,18 +713,18 @@ function App() {
     success: "#00ff88"
   };
 
-  if (currentView === "claude-sessions") {
+  if (currentView === "code-sessions") {
     return (
       <>
         <style>{`
-          .claude-sessions-scrollable::-webkit-scrollbar { width: 6px; height: 6px; }
-          .claude-sessions-scrollable::-webkit-scrollbar-track { background: #0a0a0a; }
-          .claude-sessions-scrollable::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-          .claude-sessions-scrollable::-webkit-scrollbar-thumb:hover { background: #555; }
+          .code-sessions-scrollable::-webkit-scrollbar { width: 6px; height: 6px; }
+          .code-sessions-scrollable::-webkit-scrollbar-track { background: #0a0a0a; }
+          .code-sessions-scrollable::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+          .code-sessions-scrollable::-webkit-scrollbar-thumb:hover { background: #555; }
         `}</style>
         <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
-          <ClaudeSessionsView
-            sessions={claudeSessions}
+          <CodeSessionsView
+            sessions={codeSessions}
             sessionMessages={sessionMessages}
             focusedSessionId={focusedSessionId}
             onBack={() => handleViewChange("home")}
@@ -756,21 +756,21 @@ function App() {
                <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: isConnected ? theme.success : theme.warn }} />
                {isConnected ? "SYSTEM ONLINE" : "OFFLINE"}
             </div>
-            {claudeSessions.length > 0 && (
+            {codeSessions.length > 0 && (
               <button
-                onClick={() => handleViewChange("claude-sessions")}
+                onClick={() => handleViewChange("code-sessions")}
                 style={{
                   marginTop: "16px",
                   background: "rgba(0, 217, 255, 0.05)",
-                  border: `1px solid ${claudeSessions.some(s => s.status === 'active') ? theme.accent : theme.dim}`,
-                  color: claudeSessions.some(s => s.status === 'active') ? theme.accent : theme.fg,
+                  border: `1px solid ${codeSessions.some(s => s.status === 'active') ? theme.accent : theme.dim}`,
+                  color: codeSessions.some(s => s.status === 'active') ? theme.accent : theme.fg,
                   padding: "8px 16px", cursor: "pointer", fontFamily: "inherit", fontSize: "10px", letterSpacing: "1px",
                   textTransform: "uppercase",
                   transition: "all 0.2s",
                   fontWeight: "bold"
                 }}
               >
-                {claudeSessions.some(s => s.status === 'active') ? `⚡ ${claudeSessions.filter(s => s.status === 'active').length} Active Operations` : "📦 Access Archives"}
+                {codeSessions.some(s => s.status === 'active') ? `⚡ ${codeSessions.filter(s => s.status === 'active').length} Active Operations` : "📦 Access Archives"}
               </button>
             )}
          </div>

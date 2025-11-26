@@ -55,7 +55,7 @@ jarvis/
 │   └── list_microphones.py   # List available audio devices
 ├── .memory/                  # Runtime data (gitignored)
 │   ├── jarvis-memory.json    # Projects, todos, settings
-│   └── claude-sessions/      # Claude session logs + metadata
+│   └── code-sessions/        # Code session logs + metadata
 ├── jarvis_model/             # Trained TensorFlow model (gitignored)
 └── training_data/            # Audio samples (gitignored)
 ```
