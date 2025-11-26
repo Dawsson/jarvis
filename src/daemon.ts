@@ -111,6 +111,7 @@ async function broadcastCodeSessions() {
     filesModified: s.files_modified,
     filesCreated: s.files_created,
     prUrl: s.jarvis_metadata.pr_url,
+    repositoryName: s.repository_name,
   }));
 
   broadcast({
@@ -405,6 +406,7 @@ const server = Bun.serve({
         filesModified: s.files_modified,
         filesCreated: s.files_created,
         prUrl: s.jarvis_metadata.pr_url,
+        repositoryName: s.repository_name,
       }));
       return Response.json(sessionUpdates);
     }

@@ -69,3 +69,19 @@ export async function updateSessionMetadata(session: JarvisClaudeSession) {
   const { writeFile } = await import('fs/promises');
   await writeFile(metadataFile, JSON.stringify(session, null, 2));
 }
+
+export async function deleteSession(sessionId: string) {
+  const { unlink } = await import('fs/promises');
+  const metadataFile = join(SESSIONS_DIR, `${sessionId}.meta.json`);
+  const jsonlFile = join(SESSIONS_DIR, `${sessionId}.jsonl`);
+
+  try {
+    // Delete both files
+    await unlink(metadataFile);
+    await unlink(jsonlFile);
+    console.log(`🗑️  Deleted session files for ${sessionId}`);
+  } catch (error: any) {
+    console.error(`Failed to delete session files: ${error.message}`);
+    throw error;
+  }
+}

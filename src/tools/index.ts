@@ -18,7 +18,8 @@ export {
   createClaudeSessionTool,
   getClaudeSessionStatusTool,
   sendToClaudeSessionTool,
-  listClaudeSessionsTool
+  listClaudeSessionsTool,
+  deleteClaudeSessionTool
 } from './claude-agent';
 export {
   showOnScreenTool,
