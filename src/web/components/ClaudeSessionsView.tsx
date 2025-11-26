@@ -45,12 +45,14 @@ export const ClaudeSessionsView = ({
   sessionMessages,
   focusedSessionId,
   onBack,
+  onLoadMessages,
   theme
 }: {
   sessions: ClaudeSessionUpdate[];
   sessionMessages: Map<string, SessionMessage[]>;
   focusedSessionId?: string;
   onBack: () => void;
+  onLoadMessages?: (sessionId: string, messages: SessionMessage[]) => void;
   theme: { bg: string; fg: string; dim: string; accent: string; warn: string; success: string };
 }) => {
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
@@ -81,11 +83,13 @@ export const ClaudeSessionsView = ({
     }
   }, [sessions, focusedSessionId]);
 
-  // Fetch Code Review
+  // Fetch Code Review and Messages
   useEffect(() => {
     if (selectedSession) {
       setCodeReview(null); // Reset while loading
       setSelectedFileOp(null);
+
+      // Fetch code review
       fetch(`/api/claude-sessions/${selectedSession}/code-review`)
         .then(res => res.json())
         .then(data => {
@@ -97,6 +101,19 @@ export const ClaudeSessionsView = ({
           }
         })
         .catch(err => console.error("Failed to fetch code review", err));
+
+      // Fetch messages if not already loaded
+      if (!sessionMessages.has(selectedSession) || sessionMessages.get(selectedSession)?.length === 0) {
+        fetch(`/api/claude-sessions/${selectedSession}/messages`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.messages && onLoadMessages) {
+              onLoadMessages(selectedSession, data.messages);
+              console.log(`Loaded ${data.messages.length} messages for session ${selectedSession}`);
+            }
+          })
+          .catch(err => console.error("Failed to fetch messages", err));
+      }
     }
   }, [selectedSession]);
 
@@ -196,7 +213,7 @@ export const ClaudeSessionsView = ({
             JARVIS
           </div>
           <div style={{ fontSize: "12px", color: theme.accent, letterSpacing: "2px", opacity: 0.8 }}>
-            // CLOUD CODE SESSIONS
+            // CODE SESSIONS
           </div>
         </div>
 
@@ -329,7 +346,7 @@ export const ClaudeSessionsView = ({
                            textAlign: msg.type === 'user' ? "right" : "left",
                            padding: "0 4px"
                        }}>
-                          {msg.type === 'assistant' ? 'JARVIS' : 'YOU'} • {new Date(msg.timestamp).toLocaleTimeString()}
+                          {msg.type === 'assistant' ? 'CLAUDE' : msg.type === 'user' ? 'YOU' : msg.type === 'system' ? 'SYSTEM' : 'RESULT'} • {new Date(msg.timestamp).toLocaleTimeString()}
                        </div>
                        <div style={{
                            background: msg.type === 'assistant' ? "#1a1a1a" : "rgba(0, 217, 255, 0.1)",

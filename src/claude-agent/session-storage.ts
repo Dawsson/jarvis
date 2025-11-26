@@ -70,6 +70,46 @@ export async function updateSessionMetadata(session: JarvisClaudeSession) {
   await writeFile(metadataFile, JSON.stringify(session, null, 2));
 }
 
+export async function loadSessionMessages(sessionId: string): Promise<SessionMessage[]> {
+  try {
+    const jsonlFile = join(SESSIONS_DIR, `${sessionId}.jsonl`);
+    const content = await readFile(jsonlFile, 'utf-8');
+    const lines = content.trim().split('\n').filter(line => line.length > 0);
+
+    const messages: SessionMessage[] = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const sdkMessage = entry.message;
+
+        // Apply the same message type classification logic as in manager.ts
+        let messageType: 'user' | 'assistant' | 'system' | 'result' | 'stream_event' = sdkMessage.type as any;
+
+        // If SDK says "user" but it's actually a tool result, classify it as "result"
+        if (sdkMessage.type === 'user' && sdkMessage.message?.content) {
+          const content = sdkMessage.message.content;
+          if (Array.isArray(content) && content.length > 0 && content[0].type === 'tool_result') {
+            messageType = 'result';
+          }
+        }
+
+        messages.push({
+          type: messageType,
+          timestamp: entry.timestamp,
+          content: sdkMessage,
+        });
+      } catch (parseError) {
+        console.error(`Failed to parse JSONL line: ${line}`, parseError);
+      }
+    }
+
+    return messages;
+  } catch (error) {
+    console.error(`Failed to load messages for session ${sessionId}:`, error);
+    return [];
+  }
+}
+
 export async function deleteSession(sessionId: string) {
   const { unlink } = await import('fs/promises');
   const metadataFile = join(SESSIONS_DIR, `${sessionId}.meta.json`);

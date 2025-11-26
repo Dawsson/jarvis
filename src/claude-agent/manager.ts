@@ -6,6 +6,7 @@ import {
   saveSessionMetadata,
   loadSession,
   loadAllSessions,
+  loadSessionMessages,
   updateSessionMetadata,
   deleteSession as deleteSessionFiles
 } from './session-storage';
@@ -189,9 +190,22 @@ class ClaudeAgentManager {
     // Save message to JSONL
     await appendMessageToSession(sessionId, message);
 
+    // Determine the actual message type
+    // SDK messages can be: 'system', 'assistant', 'user', 'result', 'stream_event'
+    // But 'user' messages from SDK include both actual user input AND tool results
+    let messageType: 'user' | 'assistant' | 'system' | 'result' | 'stream_event' = message.type as any;
+
+    // If SDK says "user" but it's actually a tool result, classify it as "result"
+    if (message.type === 'user' && (message as any).message?.content) {
+      const content = (message as any).message.content;
+      if (Array.isArray(content) && content.length > 0 && content[0].type === 'tool_result') {
+        messageType = 'result';
+      }
+    }
+
     // Track message in session
     const sessionMessage: SessionMessage = {
-      type: message.type as any,
+      type: messageType,
       timestamp: new Date().toISOString(),
       content: message,
     };
@@ -396,7 +410,15 @@ class ClaudeAgentManager {
       return sessions[0] || null;
     }
 
-    return this.sessions.get(sessionId) || null;
+    let session = this.sessions.get(sessionId);
+
+    // If session exists but has no messages in memory, load them from JSONL
+    if (session && session.messages.length === 0) {
+      const messages = await loadSessionMessages(sessionId);
+      session.messages = messages;
+    }
+
+    return session || null;
   }
 
   async listSessions(activeOnly: boolean = true): Promise<JarvisClaudeSession[]> {

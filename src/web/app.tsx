@@ -190,6 +190,13 @@ function App() {
             sessionMessages={sessionMessages}
             focusedSessionId={focusedSessionId}
             onBack={() => handleViewChange("home")}
+            onLoadMessages={(sessionId, messages) => {
+              setSessionMessages(prev => {
+                const newMap = new Map(prev);
+                newMap.set(sessionId, messages);
+                return newMap;
+              });
+            }}
             theme={theme}
           />
         </div>

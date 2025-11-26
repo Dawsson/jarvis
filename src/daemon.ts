@@ -411,6 +411,21 @@ const server = Bun.serve({
       return Response.json(sessionUpdates);
     }
 
+    // Get messages for a specific session
+    if (url.pathname.startsWith("/api/claude-sessions/") && url.pathname.endsWith("/messages")) {
+      const sessionId = url.pathname.split("/")[3];
+      const session = await claudeAgentManager.getSession(sessionId);
+
+      if (!session) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      return Response.json({
+        sessionId: session.session_id,
+        messages: session.messages,
+      });
+    }
+
     // Get detailed code review for a specific session
     if (url.pathname.startsWith("/api/claude-sessions/") && url.pathname.endsWith("/code-review")) {
       const sessionId = url.pathname.split("/")[3];
