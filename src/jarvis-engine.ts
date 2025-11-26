@@ -24,6 +24,7 @@ import {
   getClaudeSessionStatusTool,
   sendToClaudeSessionTool,
   listClaudeSessionsTool,
+  deleteClaudeSessionTool,
   showOnScreenTool
 } from "./tools";
 import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, deleteTodoTool, updateNotesTool } from "./tools/memory-tools";
@@ -271,7 +272,7 @@ WORKFLOW:
 2. NEVER claim to have done something without actually calling the tool
 3. For volume commands ("set volume to X", "volume to X%", etc), you MUST call the volume tool
 4. For coding sessions ("create a session", "open a PR", "build X feature"), use createClaudeSession tool - it automatically creates a git worktree and opens a PR when complete
-5. After tool execution, return ONE JSON object (not an array!)
+5. To delete finished sessions ("delete that session", "remove completed sessions"), use deleteClaudeSession tool - only works on completed/errored sessions, not active ones
 
 SPEECH RULES:
 - speechText should sound natural when spoken aloud
@@ -326,6 +327,7 @@ Default to expectFollowUp=false unless absolutely necessary.`,
           getClaudeSessionStatus: getClaudeSessionStatusTool,
           sendToClaudeSession: sendToClaudeSessionTool,
           listClaudeSessions: listClaudeSessionsTool,
+          deleteClaudeSession: deleteClaudeSessionTool,
           showOnScreen: showOnScreenTool
         },
         stopWhen: stepCountIs(5),

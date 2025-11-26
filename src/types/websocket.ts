@@ -18,6 +18,7 @@ export interface ClaudeSessionUpdate {
   filesCreated: string[];
   codeReview?: CodeReviewSummary;
   prUrl?: string;
+  repositoryName?: string;
 }
 
 // WebSocket message types from server to client

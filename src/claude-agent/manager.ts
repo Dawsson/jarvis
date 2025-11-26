@@ -6,7 +6,8 @@ import {
   saveSessionMetadata,
   loadSession,
   loadAllSessions,
-  updateSessionMetadata
+  updateSessionMetadata,
+  deleteSession as deleteSessionFiles
 } from './session-storage';
 import { createWorktree, generateWorktreeName, getDefaultBranch } from './worktree';
 import { getCurrentRepository, getRepositoryByName } from './repository';
@@ -435,6 +436,28 @@ class ClaudeAgentManager {
       console.error(`❌ Failed to send message to session ${sessionId}:`, error);
       return false;
     }
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.init();
+
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Don't allow deleting active sessions
+    if (session.status === 'active') {
+      throw new Error('Cannot delete an active session');
+    }
+
+    // Remove from memory
+    this.sessions.delete(sessionId);
+
+    // Delete files
+    await deleteSessionFiles(sessionId);
+
+    console.log(`🗑️  Deleted session ${sessionId}`);
   }
 }
 

@@ -196,3 +196,48 @@ export const listClaudeSessionsTool: Tool = {
     }
   }
 };
+
+export const deleteClaudeSessionTool: Tool = {
+  description: 'Delete a completed or errored Claude Agent SDK session. Use this when the user wants to clean up finished sessions. Cannot delete active sessions.',
+  inputSchema: z.object({
+    sessionId: z.string().describe('Session ID to delete'),
+  }),
+  execute: async ({ sessionId }) => {
+    try {
+      const session = await claudeAgentManager.getSession(sessionId);
+
+      if (!session) {
+        return {
+          success: false,
+          message: `No session found with ID: ${sessionId}`,
+        };
+      }
+
+      // Don't allow deleting active sessions
+      if (session.status === 'active') {
+        return {
+          success: false,
+          message: 'Cannot delete an active session, Sir. Please wait for it to complete or error.',
+        };
+      }
+
+      await claudeAgentManager.deleteSession(sessionId);
+
+      return {
+        success: true,
+        message: `Session deleted, Sir. The session for "${session.task}" has been removed.`,
+        details: {
+          sessionId,
+          task: session.task,
+          status: session.status,
+        }
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `Failed to delete session: ${error.message}`,
+        error: error.message,
+      };
+    }
+  }
+};
