@@ -1,5 +1,5 @@
 import { query, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { JarvisClaudeSession, CreateSessionOptions, SessionMessage } from './types';
+import type { JarvisClaudeSession, CreateSessionOptions, SessionMessage, FileOperation, CodeReviewSummary } from './types';
 import {
   initSessionStorage,
   appendMessageToSession,
@@ -8,10 +8,11 @@ import {
   loadAllSessions,
   updateSessionMetadata
 } from './session-storage';
-import { createWorktree, generateWorktreeName } from './worktree';
+import { createWorktree, generateWorktreeName, getDefaultBranch } from './worktree';
 import { getCurrentRepository, getRepositoryByName } from './repository';
 import { autoCreatePR } from './pr-utils';
 import { randomBytes } from 'crypto';
+import { diffLines, type Change } from 'diff';
 
 // Event types for real-time updates
 export type SessionEventType = 'session-created' | 'session-updated' | 'session-completed' | 'session-error' | 'session-message';
@@ -92,7 +93,8 @@ class ClaudeAgentManager {
     if (options.useWorktree) {
       const branchName = options.worktreeName || generateWorktreeName(task);
       try {
-        worktreePath = await createWorktree(branchName, 'main', repository?.path);
+        const defaultBranch = await getDefaultBranch(repository?.path);
+        worktreePath = await createWorktree(branchName, defaultBranch, repository?.path);
         cwd = worktreePath;
       } catch (error: any) {
         console.error(`Warning: Failed to create worktree, using current directory: ${error.message}`);
@@ -212,28 +214,128 @@ class ClaudeAgentManager {
   }
 
   private trackFileOperations(session: JarvisClaudeSession, message: any) {
-    // TODO: Parse tool results to extract file operations
-    // This is a simplified version - enhance based on actual message structure
+    // Parse SDK messages to track file operations with proper diffs
     try {
-      const result = message.result;
-      if (result && typeof result === 'string') {
-        // Look for file modification patterns
-        if (result.includes('created') || result.includes('wrote')) {
-          // Extract file paths (simplified)
-          const fileMatch = result.match(/['"`]([^'"`]+\.[a-z]+)['"`]/i);
-          if (fileMatch && fileMatch[1]) {
-            session.files_created.push(fileMatch[1]);
-          }
-        }
-        if (result.includes('modified') || result.includes('edited')) {
-          const fileMatch = result.match(/['"`]([^'"`]+\.[a-z]+)['"`]/i);
-          if (fileMatch && fileMatch[1]) {
-            session.files_modified.push(fileMatch[1]);
+      // Initialize code_review if not exists
+      if (!session.code_review) {
+        session.code_review = {
+          totalFiles: 0,
+          filesCreated: 0,
+          filesModified: 0,
+          filesRead: 0,
+          totalLinesAdded: 0,
+          totalLinesRemoved: 0,
+          fileOperations: [],
+        };
+      }
+
+      // Look through recent messages to find tool uses and their results
+      const recentMessages = session.messages.slice(-5); // Last 5 messages
+
+      for (const msg of recentMessages) {
+        const content = msg.content as any;
+
+        // Check for assistant messages with tool uses
+        if (content.type === 'assistant' && content.message?.content) {
+          for (const block of content.message.content) {
+            if (block.type === 'tool_use') {
+              const toolName = block.name;
+              const toolInput = block.input || {};
+              const toolUseId = block.id;
+              const timestamp = msg.timestamp;
+
+              // Track Read operations
+              if (toolName === 'Read' && toolInput.file_path) {
+                const filePath = toolInput.file_path;
+                if (!session.files_read.includes(filePath)) {
+                  session.files_read.push(filePath);
+                }
+                session.code_review.fileOperations.push({
+                  path: filePath,
+                  operation: 'read',
+                  timestamp,
+                  toolUseId,
+                });
+                session.code_review.filesRead++;
+              }
+
+              // Track Write operations (new files)
+              if (toolName === 'Write' && toolInput.file_path && toolInput.content) {
+                const filePath = toolInput.file_path;
+                const newContent = toolInput.content;
+
+                if (!session.files_created.includes(filePath)) {
+                  session.files_created.push(filePath);
+                }
+
+                const linesAdded = (newContent.match(/\n/g) || []).length + 1;
+                session.code_review.totalLinesAdded += linesAdded;
+                session.code_review.filesCreated++;
+
+                session.code_review.fileOperations.push({
+                  path: filePath,
+                  operation: 'write',
+                  timestamp,
+                  toolUseId,
+                  newContent,
+                  linesAdded,
+                  linesRemoved: 0,
+                });
+              }
+
+              // Track Edit operations (modifications)
+              if (toolName === 'Edit' && toolInput.file_path && toolInput.old_string && toolInput.new_string) {
+                const filePath = toolInput.file_path;
+                const oldString = toolInput.old_string;
+                const newString = toolInput.new_string;
+
+                if (!session.files_modified.includes(filePath)) {
+                  session.files_modified.push(filePath);
+                }
+
+                // Calculate diff
+                const diff = diffLines(oldString, newString);
+                let linesAdded = 0;
+                let linesRemoved = 0;
+
+                for (const part of diff) {
+                  if (part.added) {
+                    linesAdded += part.count || 0;
+                  } else if (part.removed) {
+                    linesRemoved += part.count || 0;
+                  }
+                }
+
+                session.code_review.totalLinesAdded += linesAdded;
+                session.code_review.totalLinesRemoved += linesRemoved;
+                session.code_review.filesModified++;
+
+                session.code_review.fileOperations.push({
+                  path: filePath,
+                  operation: 'edit',
+                  timestamp,
+                  toolUseId,
+                  oldContent: oldString,
+                  newContent: newString,
+                  linesAdded,
+                  linesRemoved,
+                });
+              }
+            }
           }
         }
       }
+
+      // Update total files count (deduplicate)
+      const uniqueFiles = new Set([
+        ...session.files_created,
+        ...session.files_modified,
+        ...session.files_read,
+      ]);
+      session.code_review.totalFiles = uniqueFiles.size;
+
     } catch (error) {
-      // Ignore parsing errors
+      console.error('Error tracking file operations:', error);
     }
   }
 

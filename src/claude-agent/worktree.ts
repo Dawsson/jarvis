@@ -4,6 +4,43 @@ import { join } from 'path';
 
 const execAsync = promisify(exec);
 
+export async function getDefaultBranch(repositoryPath?: string): Promise<string> {
+  try {
+    const repoPath = repositoryPath || process.cwd();
+
+    // Try to get the default branch from remote HEAD
+    try {
+      const { stdout } = await execAsync(`cd "${repoPath}" && git symbolic-ref refs/remotes/origin/HEAD`);
+      const match = stdout.trim().match(/refs\/remotes\/origin\/(.+)/);
+      if (match && match[1]) {
+        return match[1];
+      }
+    } catch {
+      // If remote HEAD doesn't work, check which branches exist
+    }
+
+    // Check if master exists (most common for older repos)
+    try {
+      await execAsync(`cd "${repoPath}" && git rev-parse --verify master`);
+      return 'master';
+    } catch {
+      // master doesn't exist, try main
+    }
+
+    // Check if main exists
+    try {
+      await execAsync(`cd "${repoPath}" && git rev-parse --verify main`);
+      return 'main';
+    } catch {
+      // Neither exists, default to main
+      return 'main';
+    }
+  } catch (error) {
+    // If all else fails, default to main
+    return 'main';
+  }
+}
+
 export function generateWorktreeName(task: string): string {
   // Create a safe branch name from the task description
   const safeName = task

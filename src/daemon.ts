@@ -409,6 +409,32 @@ const server = Bun.serve({
       return Response.json(sessionUpdates);
     }
 
+    // Get detailed code review for a specific session
+    if (url.pathname.startsWith("/api/claude-sessions/") && url.pathname.endsWith("/code-review")) {
+      const sessionId = url.pathname.split("/")[3];
+      const session = await claudeAgentManager.getSession(sessionId);
+
+      if (!session) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      return Response.json({
+        sessionId: session.session_id,
+        task: session.task,
+        status: session.status,
+        codeReview: session.code_review || {
+          totalFiles: 0,
+          filesCreated: 0,
+          filesModified: 0,
+          filesRead: 0,
+          totalLinesAdded: 0,
+          totalLinesRemoved: 0,
+          fileOperations: [],
+        },
+        prUrl: session.jarvis_metadata.pr_url,
+      });
+    }
+
     // Serve bundled JS
     if (url.pathname === "/app.js") {
       return new Response(Bun.file("dist/app.js"), {

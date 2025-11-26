@@ -1,5 +1,5 @@
 import type { JarvisStatus, JarvisEvent } from "../jarvis-engine";
-import type { JarvisClaudeSession, SessionMessage } from "../claude-agent/types";
+import type { JarvisClaudeSession, SessionMessage, CodeReviewSummary } from "../claude-agent/types";
 
 // Screen view types for the tiling manager
 export type ScreenView = "home" | "claude-sessions" | "split";
@@ -16,6 +16,7 @@ export interface ClaudeSessionUpdate {
   };
   filesModified: string[];
   filesCreated: string[];
+  codeReview?: CodeReviewSummary;
   prUrl?: string;
 }
 

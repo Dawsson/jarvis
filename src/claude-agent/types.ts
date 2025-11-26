@@ -6,6 +6,29 @@ export interface SessionMessage {
   content: SDKMessage;
 }
 
+export interface FileOperation {
+  path: string;
+  operation: 'read' | 'write' | 'edit';
+  timestamp: string;
+  toolUseId: string;
+  // For edits, store the changes
+  oldContent?: string;
+  newContent?: string;
+  // For tracking what changed
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+export interface CodeReviewSummary {
+  totalFiles: number;
+  filesCreated: number;
+  filesModified: number;
+  filesRead: number;
+  totalLinesAdded: number;
+  totalLinesRemoved: number;
+  fileOperations: FileOperation[];
+}
+
 export interface JarvisClaudeSession {
   session_id: string;
   created_at: string;
@@ -21,6 +44,7 @@ export interface JarvisClaudeSession {
   files_created: string[];
   files_read: string[];
   error_message?: string;
+  code_review?: CodeReviewSummary; // Enhanced file tracking with diffs
   jarvis_metadata: {
     voice_command: string;
     voice_results_summary: string;
