@@ -1,4 +1,4 @@
-# Claude Sessions UI - Visual Comparison
+# Code Sessions UI - Visual Comparison
 
 ## Before vs After
 

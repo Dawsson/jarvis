@@ -2,10 +2,10 @@ import type { JarvisStatus, JarvisEvent } from "../jarvis-engine";
 import type { JarvisClaudeSession, SessionMessage, CodeReviewSummary } from "../claude-agent/types";
 
 // Screen view types for the tiling manager
-export type ScreenView = "home" | "claude-sessions" | "split";
+export type ScreenView = "home" | "code-sessions" | "split";
 
-// Claude session update for real-time streaming
-export interface ClaudeSessionUpdate {
+// Code session update for real-time streaming
+export interface CodeSessionUpdate {
   sessionId: string;
   status: JarvisClaudeSession["status"];
   task: string;
@@ -29,8 +29,8 @@ export type ServerMessage =
   | { type: "reminders-update"; data: { reminders: any[] } }
   | { type: "system-stats"; data: { cpu: number; memory: number; uptime: number } }
   | { type: "screen-control"; data: { view: ScreenView; sessionId?: string } }
-  | { type: "claude-sessions-update"; data: { sessions: ClaudeSessionUpdate[] } }
-  | { type: "claude-session-message"; data: { sessionId: string; message: SessionMessage } }
+  | { type: "code-sessions-update"; data: { sessions: CodeSessionUpdate[] } }
+  | { type: "code-session-message"; data: { sessionId: string; message: SessionMessage } }
   | { type: "error"; message: string };
 
 // WebSocket message types from client to server
@@ -38,7 +38,7 @@ export type ClientMessage =
   | { type: "ping" }
   | { type: "replay-audio" }
   | { type: "change-microphone"; microphoneIndex: number | null }
-  | { type: "request-claude-sessions" }
+  | { type: "request-code-sessions" }
   | { type: "set-view"; view: ScreenView };
 
 export interface JarvisState {
