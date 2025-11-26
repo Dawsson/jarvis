@@ -17,6 +17,14 @@ import * as readline from "readline";
 console.log("🔍 Checking for existing instances...");
 killExistingInstances(7777);
 
+// Kill any orphaned vibration sound processes from previous crashes
+console.log("🔊 Cleaning up any orphaned vibration sounds...");
+try {
+  spawn("pkill", ["-f", "afplay.*vibration.wav"]);
+} catch (error) {
+  // Ignore errors if pkill fails
+}
+
 // Ask user for activation mode
 console.log("\n🎯 Choose activation mode:");
 console.log("  1. Voice only (say 'Jarvis')");
@@ -146,14 +154,14 @@ const vibrationSoundPath = join(process.cwd(), "vibration.wav");
 function startVibrationSound() {
   // Stop any existing vibration sound
   stopVibrationSound();
-  
+
   // Start playing vibration sound in a loop with louder volume (0.6 = 60% volume)
   // Using a shell loop since afplay doesn't support looping directly
   vibrationSoundProcess = spawn("sh", [
     "-c",
     `while true; do afplay -v 0.6 "${vibrationSoundPath}" 2>/dev/null || break; done`
   ]);
-  
+
   vibrationSoundProcess.on("error", (error) => {
     console.error("Failed to start vibration sound:", error);
     vibrationSoundProcess = null;
@@ -162,8 +170,17 @@ function startVibrationSound() {
 
 function stopVibrationSound() {
   if (vibrationSoundProcess) {
-    vibrationSoundProcess.kill();
+    // Kill the process
+    vibrationSoundProcess.kill('SIGKILL');
     vibrationSoundProcess = null;
+  }
+
+  // Also kill any orphaned afplay processes playing the vibration sound
+  // This ensures cleanup even if the parent shell process was killed abruptly
+  try {
+    spawn("pkill", ["-f", `afplay.*${vibrationSoundPath}`]);
+  } catch (error) {
+    // Ignore errors if pkill fails (e.g., no matching processes)
   }
 }
 

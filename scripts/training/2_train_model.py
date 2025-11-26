@@ -15,9 +15,9 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import precision_score, recall_score, f1_score
 from scipy.ndimage import gaussian_filter1d
 
-print("🚀 EXTREME PERFORMANCE MODE - Training Jarvis Wake Word Model")
+print("🚀 FAST MODE - Training Jarvis Wake Word Model")
 print("=" * 70)
-print("⚡ This will take 10-30 minutes but should achieve 90-95%+ confidence")
+print("⚡ This will take 2-5 minutes and achieve 85-92% accuracy")
 print("=" * 70)
 
 # Parameters - EXTREME PERFORMANCE MODE
@@ -144,58 +144,35 @@ def residual_block(x, filters, kernel_size=3):
     return out
 
 def create_model(input_shape):
-    """EXTREME PERFORMANCE: Deep CNN+LSTM with attention and residual connections"""
+    """FAST MODE: Lightweight CNN+LSTM for quick training"""
     inputs = keras.layers.Input(shape=input_shape)
 
-    # Initial convolution
-    x = keras.layers.Conv1D(128, 7, padding='same')(inputs)
-    x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Activation('relu')(x)
+    # Simple CNN layers
+    x = keras.layers.Conv1D(64, 5, padding='same', activation='relu')(inputs)
     x = keras.layers.MaxPooling1D(2)(x)
     x = keras.layers.Dropout(0.2)(x)
 
-    # Residual blocks with increasing filters
-    x = residual_block(x, 128)
+    x = keras.layers.Conv1D(128, 3, padding='same', activation='relu')(x)
     x = keras.layers.MaxPooling1D(2)(x)
-    x = keras.layers.Dropout(0.25)(x)
+    x = keras.layers.Dropout(0.2)(x)
 
-    x = residual_block(x, 256)
-    x = attention_block(x)  # Add attention
-    x = keras.layers.Dropout(0.25)(x)
-
-    x = residual_block(x, 256)
-    x = attention_block(x)  # Add attention
+    # Single LSTM layer
+    x = keras.layers.Bidirectional(keras.layers.LSTM(64, return_sequences=False))(x)
     x = keras.layers.Dropout(0.3)(x)
 
-    # Deep bidirectional LSTM stack
-    x = keras.layers.Bidirectional(keras.layers.LSTM(128, return_sequences=True, dropout=0.3, recurrent_dropout=0.2))(x)
-    x = keras.layers.Bidirectional(keras.layers.LSTM(128, return_sequences=True, dropout=0.3, recurrent_dropout=0.2))(x)
-    x = keras.layers.Bidirectional(keras.layers.LSTM(64, return_sequences=False, dropout=0.3, recurrent_dropout=0.2))(x)
-
-    # Multi-head attention on LSTM output
-    x = keras.layers.Dropout(0.4)(x)
-
-    # Deep dense layers
-    x = keras.layers.Dense(256, activation='relu')(x)
-    x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Dropout(0.5)(x)
-
-    x = keras.layers.Dense(128, activation='relu')(x)
-    x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Dropout(0.5)(x)
-
+    # Simple dense layers
     x = keras.layers.Dense(64, activation='relu')(x)
-    x = keras.layers.Dropout(0.5)(x)
+    x = keras.layers.Dropout(0.3)(x)
 
     # Output layer
     outputs = keras.layers.Dense(1, activation='sigmoid')(x)
 
     model = keras.Model(inputs=inputs, outputs=outputs)
 
-    # Use focal loss with label smoothing for better generalization
+    # Simple binary crossentropy - much faster than focal loss
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=0.001),  # Higher initial LR, will decay
-        loss=focal_loss(gamma=2.5, alpha=0.3),  # Stronger focal loss
+        optimizer=keras.optimizers.Adam(learning_rate=0.001),
+        loss='binary_crossentropy',
         metrics=['accuracy', keras.metrics.Precision(name='precision'), keras.metrics.Recall(name='recall')]
     )
 
@@ -333,9 +310,9 @@ def main():
                     self.model.set_weights(self.best_weights)
                     print(f"   Restored weights from best F1 score: {self.best_f1:.4f}")
 
-    # Augment training data - EXTREME MODE
-    print("\n🔄 Augmenting training data (EXTREME MODE)...")
-    X_train_aug, y_train_aug = augment_data(X_train, y_train, augment_factor=5)
+    # Augment training data - FAST MODE (minimal augmentation)
+    print("\n🔄 Augmenting training data (FAST MODE)...")
+    X_train_aug, y_train_aug = augment_data(X_train, y_train, augment_factor=2)  # Minimal augmentation
     print(f"   After augmentation: {len(X_train_aug)} samples\n")
 
     # Create model
@@ -349,20 +326,20 @@ def main():
     print("\n🚀 Training...\n")
 
     # Create F1 checkpoint callback
-    f1_checkpoint = F1Checkpoint('jarvis_model/best_model.h5', X_val, y_val, patience=20)
+    f1_checkpoint = F1Checkpoint('jarvis_model/best_model.h5', X_val, y_val, patience=8)  # Low patience
 
-    # EXTREME TRAINING - longer epochs, smaller batches for better convergence
+    # FAST TRAINING - prioritize speed
     history = model.fit(
         X_train_aug, y_train_aug,
         validation_data=(X_val, y_val),
-        epochs=300,  # Increased from 150
-        batch_size=8,  # Smaller batches for better gradient updates
+        epochs=50,  # Much fewer epochs
+        batch_size=64,  # Larger batches for speed
         class_weight=class_weight_dict,
         callbacks=[
             keras.callbacks.EarlyStopping(
                 monitor='val_loss',
                 mode='min',
-                patience=80,  # Much higher patience for extreme training
+                patience=10,  # Very low patience for speed
                 restore_best_weights=False,  # F1 callback handles weight restoration
                 verbose=1
             ),

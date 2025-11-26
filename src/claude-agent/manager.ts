@@ -316,10 +316,23 @@ class ClaudeAgentManager {
       return false; // Session not active
     }
 
-    // TODO: Implement message sending to active stream
-    // This depends on Agent SDK's streaming message API
-    console.log(`📨 Sending message to session ${sessionId}: ${message}`);
-    return true;
+    try {
+      // Create an async generator that yields a single user message
+      async function* messageStream() {
+        yield {
+          type: 'user' as const,
+          text: message,
+        };
+      }
+
+      // Send the message to the active stream
+      await stream.streamInput(messageStream());
+      console.log(`📨 Successfully sent message to session ${sessionId}: ${message}`);
+      return true;
+    } catch (error: any) {
+      console.error(`❌ Failed to send message to session ${sessionId}:`, error);
+      return false;
+    }
   }
 }
 

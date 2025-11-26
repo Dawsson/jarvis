@@ -8,7 +8,7 @@
     "start": "bun src/index.tsx",
     "daemon": "bun --hot src/daemon.ts",
     "collect": "uvx --with pyaudio --with numpy python3 scripts/training/1_collect_samples.py",
-    "train": "uvx --with tensorflow --with librosa --with scikit-learn --with soundfile python3 scripts/training/2_train_model.py",
+    "train": "uvx --from tensorflow-macos --with tensorflow-metal --with librosa --with scikit-learn --with soundfile python3 scripts/training/2_train_model.py",
     "test-model": "uvx --with tensorflow --with librosa --with pyaudio python3 scripts/training/3_test_model.py",
     "list-mics": "uvx --with pyaudio python3 scripts/list_microphones.py",
     "add-word": "bun scripts/add-word.ts",

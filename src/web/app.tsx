@@ -253,13 +253,15 @@ const ClaudeSessionsView = ({
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
         {/* Sessions List (Left Panel) */}
-        <div style={{
+        <div className="claude-sessions-scrollable" style={{
           width: "350px",
           borderRight: `1px solid ${theme.dim}`,
           overflowY: "auto",
+          overflowX: "hidden",
           padding: "10px",
+          minHeight: 0,
         }}>
           {sessions.length === 0 ? (
             <div style={{
@@ -360,14 +362,15 @@ const ClaudeSessionsView = ({
 
                 {/* Files List */}
                 {(selectedSessionData.filesCreated.length > 0 || selectedSessionData.filesModified.length > 0) && (
-                  <div style={{
+                  <div className="claude-sessions-scrollable" style={{
                     marginTop: "12px",
                     padding: "10px",
                     background: "#111",
                     borderRadius: "4px",
                     fontSize: "11px",
-                    maxHeight: "100px",
+                    maxHeight: "120px",
                     overflowY: "auto",
+                    overflowX: "hidden",
                   }}>
                     {selectedSessionData.filesCreated.map((f, i) => (
                       <div key={`created-${i}`} style={{ color: theme.success, marginBottom: "2px" }}>
@@ -383,12 +386,16 @@ const ClaudeSessionsView = ({
                 )}
               </div>
 
-              {/* Messages Stream */}
-              <div style={{
+              {/* Messages Stream - Full height scrollable */}
+              <div className="claude-sessions-scrollable" style={{
                 flex: 1,
                 overflowY: "auto",
+                overflowX: "hidden",
                 padding: "16px 20px",
                 background: "#050505",
+                minHeight: 0, // Critical for flex scrolling
+                display: "flex",
+                flexDirection: "column",
               }}>
                 {selectedMessages.length === 0 ? (
                   <div style={{ textAlign: "center", color: theme.dim, padding: "40px" }}>
@@ -397,35 +404,46 @@ const ClaudeSessionsView = ({
                       : 'No message history available'}
                   </div>
                 ) : (
-                  selectedMessages.slice(-50).map((msg, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        marginBottom: "12px",
-                        padding: "10px",
-                        background: msg.type === 'assistant' ? '#0d1117' : '#111',
-                        borderLeft: `3px solid ${msg.type === 'assistant' ? theme.accent : msg.type === 'result' ? theme.success : theme.dim}`,
-                        fontSize: "12px",
-                        lineHeight: "1.5",
-                      }}
-                    >
-                      <div style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginBottom: "6px",
-                        fontSize: "10px",
-                        color: theme.dim,
-                      }}>
-                        <span>{getMessageTypeIcon(msg.type)} {msg.type.toUpperCase()}</span>
-                        <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                  <>
+                    {selectedMessages.map((msg, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          marginBottom: "12px",
+                          padding: "12px",
+                          background: msg.type === 'assistant' ? '#0d1117' : '#111',
+                          borderLeft: `3px solid ${msg.type === 'assistant' ? theme.accent : msg.type === 'result' ? theme.success : theme.dim}`,
+                          fontSize: "12px",
+                          lineHeight: "1.6",
+                          borderRadius: "4px",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <div style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          marginBottom: "8px",
+                          fontSize: "10px",
+                          color: theme.dim,
+                          fontWeight: "bold",
+                        }}>
+                          <span>{getMessageTypeIcon(msg.type)} {msg.type.toUpperCase()}</span>
+                          <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                        </div>
+                        <div style={{
+                          color: "#ccc",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          maxHeight: "none",
+                          overflowY: "visible"
+                        }}>
+                          {formatMessageContent(msg)}
+                        </div>
                       </div>
-                      <div style={{ color: "#ccc", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {formatMessageContent(msg)}
-                      </div>
-                    </div>
-                  ))
+                    ))}
+                    <div ref={messagesEndRef} />
+                  </>
                 )}
-                <div ref={messagesEndRef} />
               </div>
             </>
           ) : (
@@ -616,13 +634,34 @@ function App() {
   // If we're showing the Claude Sessions view, render that instead
   if (currentView === "claude-sessions") {
     return (
-      <ClaudeSessionsView
-        sessions={claudeSessions}
-        sessionMessages={sessionMessages}
-        focusedSessionId={focusedSessionId}
-        onBack={() => handleViewChange("home")}
-        theme={theme}
-      />
+      <>
+        <style>{`
+          /* Custom scrollbar styling for Claude Sessions */
+          .claude-sessions-scrollable::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+          }
+          .claude-sessions-scrollable::-webkit-scrollbar-track {
+            background: #0a0a0a;
+          }
+          .claude-sessions-scrollable::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+          }
+          .claude-sessions-scrollable::-webkit-scrollbar-thumb:hover {
+            background: #555;
+          }
+        `}</style>
+        <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
+          <ClaudeSessionsView
+            sessions={claudeSessions}
+            sessionMessages={sessionMessages}
+            focusedSessionId={focusedSessionId}
+            onBack={() => handleViewChange("home")}
+            theme={theme}
+          />
+        </div>
+      </>
     );
   }
 

@@ -58,9 +58,9 @@ SILENCE_THRESHOLD = 300  # Increased from 150 - background noise now counts as s
 SILENCE_CHUNKS_THRESHOLD = int((SILENCE_DURATION * RATE) / CHUNK)
 
 # Wake word detection settings
-DETECTION_THRESHOLD = 0.75  # Base threshold for detection (lowered from 0.80)
+DETECTION_THRESHOLD = 0.80  # Base threshold for detection - 80% confidence required
 HIGH_CONFIDENCE_THRESHOLD = 0.85  # Very high confidence triggers immediately
-MEDIUM_CONFIDENCE_THRESHOLD = 0.75  # Medium confidence requires consecutive detections
+MEDIUM_CONFIDENCE_THRESHOLD = 0.80  # Medium confidence requires consecutive detections - 80% confidence required
 CONSECUTIVE_DETECTIONS_REQUIRED = 2  # Require 2 consecutive detections for medium confidence
 CONFIDENCE_SMOOTHING_WINDOW = deque(maxlen=CONSECUTIVE_DETECTIONS_REQUIRED)
 

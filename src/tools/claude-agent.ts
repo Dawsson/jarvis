@@ -8,15 +8,16 @@ export const createClaudeSessionTool: Tool = {
     task: z.string().describe('The coding task description'),
     repositoryName: z.string().optional().describe('Repository name to use (e.g., "jarvis", "cookify"). Defaults to current project.'),
     cwd: z.string().optional().describe('Working directory (defaults to repository path)'),
-    useWorktree: z.boolean().optional().default(true).describe('Create isolated git worktree (default: true). Set to false to work directly in repo.'),
+    useWorktree: z.string().optional().default("true").describe('Create isolated git worktree (default: true). Set to false to work directly in repo.'),
     worktreeName: z.string().optional().describe('Name for worktree branch'),
   }),
-  execute: async ({ task, repositoryName, cwd, useWorktree = true, worktreeName }) => {
+  execute: async ({ task, repositoryName, cwd, useWorktree = "true", worktreeName }) => {
     try {
+      const useWorktreeBool = useWorktree === "true" || useWorktree === true;
       const sessionId = await claudeAgentManager.createSession(task, {
         repositoryName,
         cwd,
-        useWorktree,
+        useWorktree: useWorktreeBool,
         worktreeName,
       });
 
