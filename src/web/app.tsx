@@ -5,13 +5,13 @@ import type { JarvisStatus } from "../jarvis-engine";
 import type { SessionMessage } from "../claude-agent/types";
 import { Reactor } from "./components/Reactor";
 import { StatDisplay } from "./components/StatDisplay";
-import { CodeSessionsView } from "./components/CodeSessionsView";
 import { Header } from "./components/Header";
 import { MainView } from "./components/MainView";
 import { SystemLogsPanel } from "./components/SystemLogsPanel";
 import { ProjectPanel } from "./components/ProjectPanel";
 import { MicrophoneSelector } from "./components/MicrophoneSelector";
 import type { Theme, SystemStats, Todo, Reminder } from "./components/types";
+import { ClaudeSessionsView } from "./components/ClaudeSessionsView";
 
 function App() {
   // State
@@ -185,7 +185,7 @@ function App() {
           .code-sessions-scrollable::-webkit-scrollbar-thumb:hover { background: #555; }
         `}</style>
         <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
-          <CodeSessionsView
+          <ClaudeSessionsView
             sessions={codeSessions}
             sessionMessages={sessionMessages}
             focusedSessionId={focusedSessionId}
@@ -216,7 +216,7 @@ function App() {
       <Header
         isConnected={isConnected}
         theme={theme}
-        codeSessions={codeSessions}
+        claudeSessions={codeSessions}
         time={time}
         selectedMic={selectedMic}
         onViewChange={handleViewChange}
