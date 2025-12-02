@@ -16,6 +16,7 @@ interface HeaderProps {
   claudeSessions: ClaudeSessionUpdate[];
   time: Date;
   selectedMic: number | null;
+  isMuted: boolean;
   onViewChange: (view: ScreenView) => void;
   onToggleMicSelector: () => void;
 }
@@ -26,6 +27,7 @@ export const Header = ({
   claudeSessions,
   time,
   selectedMic,
+  isMuted,
   onViewChange,
   onToggleMicSelector
 }: HeaderProps) => {
@@ -99,8 +101,15 @@ export const Header = ({
         <div style={{ fontSize: "24px", color: "#fff", letterSpacing: "2px" }}>
           {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
-        <div onClick={onToggleMicSelector} style={{ fontSize: "11px", color: theme.dim, letterSpacing: "1px", cursor: "pointer", marginTop: "4px" }}>
-          AUDIO INPUT: {selectedMic !== null ? `IDX ${selectedMic}` : "AUTO"} ▼
+        <div onClick={onToggleMicSelector} style={{
+          fontSize: "11px",
+          color: isMuted ? theme.warn : theme.dim,
+          letterSpacing: "1px",
+          cursor: "pointer",
+          marginTop: "4px",
+          opacity: isMuted ? 0.7 : 1
+        }}>
+          AUDIO INPUT: {isMuted ? "MUTED" : selectedMic !== null ? `IDX ${selectedMic}` : "AUTO"} ▼
         </div>
       </div>
     </div>

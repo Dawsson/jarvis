@@ -31,6 +31,7 @@ export type ServerMessage =
   | { type: "screen-control"; data: { view: ScreenView; sessionId?: string } }
   | { type: "code-sessions-update"; data: { sessions: CodeSessionUpdate[] } }
   | { type: "code-session-message"; data: { sessionId: string; message: SessionMessage } }
+  | { type: "mute-status"; data: { muted: boolean } }
   | { type: "error"; message: string };
 
 // WebSocket message types from client to server
@@ -39,7 +40,8 @@ export type ClientMessage =
   | { type: "replay-audio" }
   | { type: "change-microphone"; microphoneIndex: number | null }
   | { type: "request-code-sessions" }
-  | { type: "set-view"; view: ScreenView };
+  | { type: "set-view"; view: ScreenView }
+  | { type: "toggle-mute" };
 
 export interface JarvisState {
   status: JarvisStatus;
@@ -52,4 +54,5 @@ export interface JarvisState {
   reminders: any[];
   systemStats?: { cpu: number; memory: number; uptime: number };
   currentView?: ScreenView;
+  muted?: boolean;
 }

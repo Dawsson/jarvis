@@ -51,6 +51,30 @@ const activationMode = await new Promise<"voice" | "keyboard" | "both">((resolve
   });
 });
 
+// Ask about always-listening mode (only if voice is enabled)
+let alwaysListening = false;
+if (activationMode === "voice" || activationMode === "both") {
+  console.log("\n🔊 Always-listening mode:");
+  console.log("  Enable continuous transcription with smart intent detection?");
+  console.log("  • Transcribes all speech in the room");
+  console.log("  • Only responds when you're talking to Jarvis");
+  console.log("  • Wake word still works for guaranteed response");
+  console.log("");
+
+  const rl2 = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  alwaysListening = await new Promise<boolean>((resolve) => {
+    rl2.question("Enable always-listening? (y/n): ", (answer) => {
+      rl2.close();
+      const choice = answer.trim().toLowerCase();
+      resolve(choice === "y" || choice === "yes");
+    });
+  });
+}
+
 const modeDescription =
   activationMode === "voice" ? "voice only (wake word)" :
   activationMode === "keyboard" ? "keyboard only (Right Option)" :
@@ -72,6 +96,7 @@ let jarvisState: JarvisState = {
   activeTodos: [],
   reminders: [],
   currentView: "home",
+  muted: false,
 };
 
 // Screen control function - called by the showOnScreen tool
@@ -140,6 +165,8 @@ const jarvis = new JarvisEngine({
   microphoneIndex: initialMicIndex,
   groqApiKey: apiKey,
   useWakeWord: activationMode === "voice" || activationMode === "both", // Enable wake word for voice and both modes
+  alwaysListening: alwaysListening, // Enable always-listening mode if user selected it
+  intentThreshold: 0.7, // Default confidence threshold for intent detection
 });
 
 // Initialize TTS for reminder announcements (use same British voice as Jarvis)
@@ -257,6 +284,13 @@ jarvis.on("*", async (event: JarvisEvent) => {
   } else if (event.type === "transcription") {
     jarvisState.transcription = event.data;
     addLog(`You: ${event.data}`);
+  } else if (event.type === "background-speech") {
+    // Background speech detected but not responding
+    addLog(`[Background] ${event.data}`);
+  } else if (event.type === "intent-detected") {
+    // Intent detected, will respond
+    const { transcription, confidence } = event.data;
+    addLog(`[Intent ${(confidence * 100).toFixed(0)}%] ${transcription}`);
   } else if (event.type === "response") {
     jarvisState.response = event.data;
     addLog(`Jarvis: ${event.data}`);
@@ -496,6 +530,14 @@ const server = Bun.serve({
           data: { view: jarvisState.currentView || "home" },
         } satisfies ServerMessage)
       );
+
+      // Send current mute status
+      ws.send(
+        JSON.stringify({
+          type: "mute-status",
+          data: { muted: jarvisState.muted || false },
+        } satisfies ServerMessage)
+      );
     },
 
     async message(ws, message) {
@@ -534,6 +576,16 @@ const server = Bun.serve({
         } else if (data.type === "set-view") {
           // Client is manually changing the view
           changeScreenView(data.view);
+        } else if (data.type === "toggle-mute") {
+          // Toggle mute state
+          const newMutedState = jarvis.toggleMute();
+          jarvisState.muted = newMutedState;
+
+          // Broadcast mute status to all clients
+          broadcast({
+            type: "mute-status",
+            data: { muted: newMutedState },
+          });
         }
       } catch (error) {
         console.error("Error parsing client message:", error);
@@ -561,11 +613,21 @@ console.log(`📡 WebSocket server ready for connections`);
 
 // Show appropriate message based on activation mode
 if (activationMode === "voice") {
-  console.log(`🎤 Listening for wake word...`);
+  if (alwaysListening) {
+    console.log(`🎤 Always-listening mode enabled - transcribing all speech with smart intent detection`);
+    console.log(`   Wake word "Jarvis" guarantees a response`);
+  } else {
+    console.log(`🎤 Listening for wake word...`);
+  }
 } else if (activationMode === "keyboard") {
   console.log(`⌨️  Ready for keyboard activation (Right Option key)`);
 } else {
-  console.log(`🎤 Listening for wake word or keyboard activation...`);
+  if (alwaysListening) {
+    console.log(`🎤 Always-listening + keyboard mode enabled`);
+    console.log(`   Say "Jarvis" or press Right Option`);
+  } else {
+    console.log(`🎤 Listening for wake word or keyboard activation...`);
+  }
 }
 
 // Setup text input interface for typing to Jarvis

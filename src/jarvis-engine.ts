@@ -5,6 +5,7 @@ import { generateText } from 'ai';
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { TextToSpeech } from "./tts";
+import { IntentDetector } from "./intent-detector";
 import {
   datetimeTool,
   calculatorTool,
@@ -30,7 +31,6 @@ import {
 import { createProjectTool, switchProjectTool, listProjectsTool, addTodoTool, listTodosTool, completeTodoTool, deleteTodoTool, updateNotesTool } from "./tools/memory-tools";
 import { addReminderTool, listRemindersTool, deleteReminderTool } from "./tools/reminder-tools";
 import { memory } from "./memory";
-import { commonWords } from "./memory/common-words";
 import { conversationHistory } from "./memory/conversation-history";
 import { reminders } from "./memory/reminders";
 
@@ -39,6 +39,8 @@ export interface JarvisConfig {
   groqApiKey: string;
   microphoneName?: string; // Optional: name of the microphone device
   useWakeWord?: boolean; // Default true, set to false for keyboard mode
+  alwaysListening?: boolean; // Default false, enables continuous transcription with intent detection
+  intentThreshold?: number; // Default 0.7, confidence threshold for intent detection (0-1)
 }
 
 export type JarvisStatus =
@@ -46,11 +48,13 @@ export type JarvisStatus =
   | "listening"
   | "wake-word-detected"
   | "recording"
+  | "transcribing"
+  | "intent-checking"
   | "processing"
   | "error";
 
 export interface JarvisEvent {
-  type: "status" | "wake-word" | "transcription" | "response" | "error" | "log";
+  type: "status" | "wake-word" | "transcription" | "response" | "error" | "log" | "background-speech" | "intent-detected";
   data: any;
 }
 
@@ -60,10 +64,18 @@ export class JarvisEngine {
   private wakeWordDetector: ChildProcess | null = null;
   private status: JarvisStatus = "idle";
   private eventHandlers: Map<string, Set<(event: JarvisEvent) => void>> = new Map();
+  private intentDetector: IntentDetector;
+  private lastWakeWordDetected: boolean = false;
+  private stderrBuffer: string = "";
+  private isMuted: boolean = false;
 
   constructor(config: JarvisConfig) {
     this.config = config;
     this.tts = new TextToSpeech(config.groqApiKey, 'Basil-PlayAI');
+    this.intentDetector = new IntentDetector(
+      config.groqApiKey,
+      config.intentThreshold ?? 0.7
+    );
     // Register this engine instance so tools can access it
     setEngineInstance(this);
   }
@@ -96,6 +108,10 @@ export class JarvisEngine {
       "pyaudio",
       "--with",
       "numpy",
+      "--with",
+      "torch",
+      "--with",
+      "torchaudio",
       "python3",
       "scripts/unified_voice.py",
     ];
@@ -109,6 +125,11 @@ export class JarvisEngine {
       args.push("--no-wake-word");
     }
 
+    // Add --always-listening flag if enabled
+    if (this.config.alwaysListening === true) {
+      args.push("--always-listening");
+    }
+
     this.wakeWordDetector = spawn("uvx", args);
 
     this.wakeWordDetector.stdout.on("data", async (data: Buffer) => {
@@ -117,17 +138,28 @@ export class JarvisEngine {
       const lines = output.split('\n').map(line => line.trim()).filter(line => line.length > 0);
 
       for (const message of lines) {
-        console.log(`📨 [JarvisEngine] Received from Python stdout: "${message}"`);
+        // Skip Python debug messages that start with emojis or DEBUG:
+        const isDebugMessage = message.startsWith("🐍") || message.startsWith("DEBUG:");
 
         if (message === "READY") {
-        console.log("✅ [JarvisEngine] Python script is READY");
-        const readyMsg = this.config.useWakeWord === false
-          ? "Recording system ready (keyboard mode)"
-          : "Voice system ready";
+        const readyMsg = this.config.alwaysListening
+          ? "🎤 Voice system ready - Always listening mode"
+          : this.config.useWakeWord === false
+            ? "⌨️  Recording system ready (keyboard mode)"
+            : "🎤 Voice system ready";
+        console.log(readyMsg);
         this.emit({ type: "log", data: readyMsg });
       } else if (message.startsWith("DETECTED:")) {
         const confidence = parseFloat(message.split(":")[1]);
-        
+
+        // Ignore if muted
+        if (this.isMuted) {
+          return;
+        }
+
+        // Mark that wake word was detected (for intent detection bypass)
+        this.lastWakeWordDetected = true;
+
         // If Jarvis is currently speaking (processing), cancel the speech
         if (this.status === "processing") {
           this.emit({ type: "log", data: "Interrupted by wake word - stopping speech" });
@@ -144,6 +176,7 @@ export class JarvisEngine {
         }
 
         this.updateStatus("wake-word-detected");
+        console.log(`🎯 Wake word detected (${(confidence * 100).toFixed(0)}%)`);
         this.emit({ type: "wake-word", data: { confidence } });
 
         // Play sound on wake word detection
@@ -153,23 +186,41 @@ export class JarvisEngine {
         this.isRecording = true;
         this.updateStatus("recording");
       } else if (message.startsWith("DEBUG:")) {
-        this.emit({ type: "log", data: message.replace("DEBUG: ", "") });
+        // Skip debug messages (too noisy)
+        continue;
       } else if (message === "RECORDING_COMPLETE") {
-        console.log("📥 [JarvisEngine] Received RECORDING_COMPLETE from Python");
-        this.emit({ type: "log", data: "📥 Received RECORDING_COMPLETE from Python, calling handleRecordingComplete()" });
         await this.handleRecordingComplete();
-      } else {
-        console.log(`⚠️ [JarvisEngine] Unknown message from Python: "${message}"`);
-        this.emit({ type: "log", data: `Unknown message from Python: "${message}"` });
+      } else if (message.startsWith("SPEECH_SEGMENT")) {
+        // Parse wake word confidence if provided (format: "SPEECH_SEGMENT:0.85")
+        const parts = message.split(":");
+        const wakeWordConfidence = parts.length > 1 ? parseFloat(parts[1]) : 0.0;
+        await this.handleSpeechSegment(wakeWordConfidence);
+      } else if (!isDebugMessage) {
+        // Only log non-debug messages we don't recognize
+        console.log(`⚠️  Unknown: ${message}`);
       }
       }
     });
 
     this.wakeWordDetector.stderr.on("data", (data: Buffer) => {
-      const msg = data.toString();
-      console.log(`⚠️ [JarvisEngine] Python stderr: ${msg}`);
-      if (!msg.includes("WARNING") && !msg.includes("FutureWarning")) {
-        this.emit({ type: "log", data: msg });
+      // Buffer stderr output to handle incomplete lines
+      this.stderrBuffer += data.toString();
+
+      // Process complete lines
+      const lines = this.stderrBuffer.split('\n');
+      // Keep the last incomplete line in buffer
+      this.stderrBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.trim().length === 0) continue;
+
+        // Log all stderr output to console
+        console.error(`⚠️ [Python stderr] ${line}`);
+
+        // Emit errors (but filter out common warnings)
+        if (!line.includes("WARNING") && !line.includes("FutureWarning") && !line.includes("UserWarning")) {
+          this.emit({ type: "error", data: line });
+        }
       }
     });
 
@@ -377,21 +428,13 @@ Default to expectFollowUp=false unless absolutely necessary.`,
   }
 
   private async handleRecordingComplete() {
-    console.log(`📋 [JarvisEngine] handleRecordingComplete() called, current status: ${this.status}`);
-    this.emit({ type: "log", data: `📋 handleRecordingComplete() called, current status: ${this.status}` });
-
     // If we're not in recording status, we've already cancelled - ignore this
     if (this.status !== "recording") {
-      console.log(`⚠️ [JarvisEngine] Ignoring recording completion - status is '${this.status}', expected 'recording'`);
-      this.emit({ type: "log", data: `⚠️ Ignoring recording completion - status is '${this.status}', expected 'recording'` });
       return;
     }
 
-    console.log("✅ [JarvisEngine] Status check passed, proceeding with processing");
-    this.emit({ type: "log", data: "✅ Status check passed, proceeding with processing" });
     this.updateStatus("processing");
-    console.log("🎤 [JarvisEngine] Starting transcription...");
-    this.emit({ type: "log", data: "Starting transcription..." });
+    console.log("🎧 Transcribing...");
 
     const tempFile = join(process.cwd(), "command.wav");
 
@@ -401,115 +444,238 @@ Default to expectFollowUp=false unless absolutely necessary.`,
       try {
         const fileStats = await stat(tempFile);
         if (fileStats.size < 1000) {
-          this.emit({ type: "log", data: "Recording too short, ignoring" });
           this.updateStatus("listening");
           this.isRecording = false;
           return;
         }
-        this.emit({ type: "log", data: `Audio file size: ${fileStats.size} bytes` });
       } catch (fileError) {
-        this.emit({ type: "error", data: "Recording file not found" });
         this.updateStatus("listening");
         this.isRecording = false;
         return;
       }
 
       // Step 1: Transcribe audio using AI SDK
-      this.emit({ type: "log", data: "Loading vocabulary..." });
-      // Load common words and custom words to help Whisper recognize them
-      const [commonWordsList, customWords] = await Promise.all([
-        commonWords.getAll(),
-        memory.getCustomWords()
-      ]);
-      
-      // Combine common words and custom words for Whisper prompt
-      const allWords = [...commonWordsList, ...customWords];
-      const whisperPrompt = allWords
-        .map(cw => {
-          // Include both the word and phonetic spelling if available
-          if (cw.phonetic) {
-            return `${cw.word}, ${cw.phonetic}`;
-          }
-          return cw.word;
-        })
-        .join(', ');
+      // Load custom vocabulary (project names, technical terms, etc.)
+      const customWords = await memory.getCustomWords();
 
-      this.emit({ type: "log", data: "Reading audio file..." });
+      // Build vocabulary prompt - use "previous transcript" style to reduce hallucination
+      // Whisper works best when the prompt looks like a previous transcription
+      // Limit to 10 words to avoid biasing too heavily
+      let whisperPrompt = '';
+      if (customWords.length > 0) {
+        // Format as if it's a previous transcript mentioning these terms naturally
+        // This helps Whisper recognize the words without forcing them into the current audio
+        const wordList = customWords.map(cw => cw.word).slice(0, 10).join(', ');
+        whisperPrompt = `Previous context includes: ${wordList}`;
+      }
+
       const audioBuffer = await readFile(tempFile);
-
-      this.emit({ type: "log", data: "Calling Whisper API..." });
       const transcriptResult = await transcribe({
         model: groq.transcription('whisper-large-v3-turbo'),
         audio: audioBuffer,
         providerOptions: {
           groq: {
             language: 'en',
-            temperature: 0,
+            temperature: 0.0,  // Most conservative - reduces hallucinations
             ...(whisperPrompt && { prompt: whisperPrompt })
           }
         }
       });
 
       const transcriptionText = transcriptResult.text;
-      this.emit({ type: "log", data: `Transcription complete: "${transcriptionText}"` });
+      console.log(`   💬 "${transcriptionText}"`);
       this.emit({ type: "transcription", data: transcriptionText });
 
       // Save user message to conversation history
       await conversationHistory.add('user', transcriptionText);
 
       // Step 2: Generate AI response with tools
-      this.emit({ type: "log", data: "Generating AI response..." });
+      console.log("   🤖 Generating response...");
       const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(transcriptionText);
-      
+
       // Save assistant response to conversation history
       await conversationHistory.add('assistant', speechText || displayText);
       this.emit({ type: "response", data: displayText });
 
       // Step 3: Speak the response via TTS
       // Keep status as "processing" while speaking so wake word can interrupt
-      this.emit({ type: "log", data: "Speaking response..." });
+      console.log("   🔊 Speaking...");
       try {
         if (speechText && speechText.trim().length > 0) {
           await this.tts.speak(speechText);
-          this.emit({ type: "log", data: "TTS complete" });
+          console.log("   ✓ Done");
         }
       } catch (ttsError: any) {
         // Ignore cancellation errors (they're expected when interrupted)
         if (!ttsError.message?.includes("SIGTERM") && !ttsError.message?.includes("killed")) {
-          this.emit({ type: "log", data: `TTS failed: ${ttsError.message}` });
+          console.error(`   ❌ TTS error: ${ttsError.message}`);
         }
       }
 
       // Update status after TTS completes (or is cancelled)
       // Only change status if we're still processing (not already interrupted)
-      this.emit({ type: "log", data: `Current status before final check: ${this.status}` });
       if (this.status === "processing") {
         this.isRecording = false;
 
         // If follow-up expected, trigger immediate recording
         if (expectsFollowUp) {
-          this.emit({ type: "log", data: "Listening for follow-up..." });
           this.updateStatus("recording");
           // Send command to unified script to record immediately
           this.wakeWordDetector?.stdin?.write("RECORD_NOW\n");
         } else {
-          this.emit({ type: "log", data: "Returning to listening state" });
           this.updateStatus("listening");
         }
-      } else {
-        this.emit({ type: "log", data: "Status already changed, not updating" });
       }
       // If status is not "processing", it means we were interrupted and status was already reset
     } catch (error: any) {
-      this.emit({ type: "error", data: `Processing error: ${error?.message || "Unknown error"}` });
-      this.emit({ type: "log", data: `Error stack: ${error?.stack}` });
+      console.error(`❌ Error: ${error?.message || "Unknown error"}`);
+      this.emit({ type: "error", data: `${error?.message || "Unknown error"}` });
       this.updateStatus("listening");
       this.isRecording = false;
     }
   }
 
+  private async handleSpeechSegment(wakeWordConfidence: number = 0.0) {
+    // Ignore if muted
+    if (this.isMuted) {
+      return;
+    }
+
+    // Always-listening mode handles speech even when in listening state
+    if (this.status !== "listening" && this.status !== "transcribing" && this.status !== "intent-checking") {
+      // Silently ignore if busy
+      return;
+    }
+
+    this.updateStatus("transcribing");
+    const tempFile = join(process.cwd(), "command.wav");
+
+    try {
+      // Check if file exists and has content
+      const { stat } = await import('fs/promises');
+      try {
+        const fileStats = await stat(tempFile);
+        if (fileStats.size < 1000) {
+          this.updateStatus("listening");
+          return;
+        }
+      } catch (fileError) {
+        this.updateStatus("listening");
+        return;
+      }
+
+      // Step 1: Transcribe audio using Groq Whisper
+      console.log("🎧 Transcribing...");
+      const customWords = await memory.getCustomWords();
+
+      // Build vocabulary prompt - use "previous transcript" style to reduce hallucination
+      let whisperPrompt = '';
+      if (customWords.length > 0) {
+        // Format as if it's a previous transcript mentioning these terms naturally
+        const wordList = customWords.map(cw => cw.word).slice(0, 10).join(', ');
+        whisperPrompt = `Previous context includes: ${wordList}`;
+      }
+
+      const audioBuffer = await readFile(tempFile);
+      const transcriptResult = await transcribe({
+        model: groq.transcription('whisper-large-v3-turbo'),
+        audio: audioBuffer,
+        providerOptions: {
+          groq: {
+            language: 'en',
+            temperature: 0.0,
+            ...(whisperPrompt && { prompt: whisperPrompt })
+          }
+        }
+      });
+
+      const transcriptionText = transcriptResult.text;
+      console.log(`   💬 "${transcriptionText}"`);
+      this.emit({ type: "transcription", data: transcriptionText });
+
+      // Step 2: Intent detection with wake word confidence boost
+      this.updateStatus("intent-checking");
+
+      const intentResult = await this.intentDetector.shouldRespond(
+        transcriptionText,
+        this.lastWakeWordDetected,
+        wakeWordConfidence
+      );
+
+      // Reset wake word flag after using it
+      const wakeWordWasDetected = this.lastWakeWordDetected;
+      this.lastWakeWordDetected = false;
+
+      if (!intentResult.shouldRespond) {
+        // Background speech - log but don't respond
+        console.log(`   🔇 Ignored (intent: ${(intentResult.confidence * 100).toFixed(0)}%, wake: ${(wakeWordConfidence * 100).toFixed(0)}%)`);
+        this.emit({ type: "background-speech", data: transcriptionText });
+        this.updateStatus("listening");
+        return;
+      }
+
+      // Intent detected - proceed with response
+      console.log(`   ✓ Responding (intent: ${(intentResult.confidence * 100).toFixed(0)}%, wake: ${(wakeWordConfidence * 100).toFixed(0)}%)`);
+      this.emit({ type: "intent-detected", data: { transcription: transcriptionText, confidence: intentResult.confidence, wakeWordConfidence } });
+
+      // Save user message to conversation history
+      await conversationHistory.add('user', transcriptionText);
+
+      // Step 3: Generate response (same as normal flow)
+      this.updateStatus("processing");
+      console.log("   🤖 Generating response...");
+      const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(transcriptionText);
+
+      // Save assistant response to conversation history
+      await conversationHistory.add('assistant', speechText || displayText);
+      this.emit({ type: "response", data: displayText });
+
+      // Step 4: Speak response
+      console.log("   🔊 Speaking...");
+      try {
+        if (speechText && speechText.trim().length > 0) {
+          await this.tts.speak(speechText);
+          console.log("   ✓ Done");
+        }
+      } catch (ttsError: any) {
+        if (!ttsError.message?.includes("SIGTERM") && !ttsError.message?.includes("killed")) {
+          console.error(`   ❌ TTS error: ${ttsError.message}`);
+        }
+      }
+
+      // Return to listening
+      if (this.status === "processing") {
+        this.updateStatus("listening");
+      }
+
+    } catch (error: any) {
+      console.error(`❌ Error: ${error?.message || "Unknown error"}`);
+      this.emit({ type: "error", data: `${error?.message || "Unknown error"}` });
+      this.updateStatus("listening");
+    }
+  }
+
   getStatus(): JarvisStatus {
     return this.status;
+  }
+
+  getMuted(): boolean {
+    return this.isMuted;
+  }
+
+  setMuted(muted: boolean) {
+    this.isMuted = muted;
+    const muteMsg = muted ? "🔇 Microphone muted" : "🔊 Microphone unmuted";
+    console.log(muteMsg);
+    this.emit({ type: "log", data: muteMsg });
+  }
+
+  toggleMute(): boolean {
+    this.isMuted = !this.isMuted;
+    const muteMsg = this.isMuted ? "🔇 Microphone muted" : "🔊 Microphone unmuted";
+    console.log(muteMsg);
+    this.emit({ type: "log", data: muteMsg });
+    return this.isMuted;
   }
 
   async updateMicrophone(index: number | null) {
@@ -590,9 +756,8 @@ Default to expectFollowUp=false unless absolutely necessary.`,
 
   // Process text input directly (bypass speech recognition)
   async processTextInput(text: string): Promise<void> {
-    console.log(`⌨️ [JarvisEngine] Processing text input: "${text}"`);
+    console.log(`⌨️  Text input: "${text}"`);
     this.updateStatus("processing");
-    this.emit({ type: "log", data: `Processing text: ${text}` });
     this.emit({ type: "transcription", data: text });
 
     try {
@@ -600,26 +765,30 @@ Default to expectFollowUp=false unless absolutely necessary.`,
       await conversationHistory.add('user', text);
 
       // Generate AI response with tools
-      this.emit({ type: "log", data: "Generating AI response..." });
+      console.log("   🤖 Generating response...");
       const { text: displayText, speechText, expectsFollowUp } = await this.generateResponse(text);
 
       // Save assistant response to conversation history
       await conversationHistory.add('assistant', displayText);
 
       this.emit({ type: "response", data: displayText });
-      this.emit({ type: "log", data: "Response generated" });
 
       // Speak the response
-      this.emit({ type: "log", data: "Speaking response..." });
+      console.log("   🔊 Speaking...");
       await this.tts.speak(speechText);
-      this.emit({ type: "log", data: "Speech complete" });
+      console.log("   ✓ Done");
 
-      // Return to listening state
-      this.updateStatus(expectsFollowUp ? "listening" : "idle");
+      // Return to listening state (always listening if that mode is enabled)
+      if (this.config.alwaysListening) {
+        this.updateStatus("listening");
+      } else {
+        this.updateStatus(expectsFollowUp ? "listening" : "idle");
+      }
     } catch (error: any) {
-      console.error("❌ [JarvisEngine] Error processing text input:", error);
+      console.error(`❌ Error: ${error.message}`);
       this.emit({ type: "error", data: error.message });
-      this.updateStatus("idle");
+      // Return to listening if in always-listening mode, otherwise idle
+      this.updateStatus(this.config.alwaysListening ? "listening" : "idle");
     }
   }
 }

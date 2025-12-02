@@ -30,6 +30,7 @@ function App() {
   const [selectedMic, setSelectedMic] = useState<number | null>(null);
   const [showMicSelector, setShowMicSelector] = useState(false);
   const [time, setTime] = useState(new Date());
+  const [isMuted, setIsMuted] = useState(false);
 
   // View management state
   const [currentView, setCurrentView] = useState<ScreenView>("home");
@@ -46,7 +47,7 @@ function App() {
      return () => clearInterval(t);
   }, []);
 
-  // Fullscreen toggle (F key)
+  // Keyboard shortcuts (F for fullscreen, M for mute)
   useEffect(() => {
     const toggleFullscreen = () => {
       if (!document.fullscreenElement) {
@@ -58,9 +59,15 @@ function App() {
       }
     };
 
+    const toggleMute = () => {
+      ws.current?.send(JSON.stringify({ type: "toggle-mute" }));
+    };
+
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.key === 'f' || e.key === 'F') {
         toggleFullscreen();
+      } else if (e.key === 'm' || e.key === 'M') {
+        toggleMute();
       }
     };
 
@@ -139,6 +146,8 @@ function App() {
             newMap.set(msg.data.sessionId, [...existing, msg.data.message]);
             return newMap;
           });
+        } else if (msg.type === "mute-status") {
+          setIsMuted(msg.data.muted);
         }
       };
     };
@@ -219,6 +228,7 @@ function App() {
         claudeSessions={codeSessions}
         time={time}
         selectedMic={selectedMic}
+        isMuted={isMuted}
         onViewChange={handleViewChange}
         onToggleMicSelector={() => setShowMicSelector(!showMicSelector)}
       />

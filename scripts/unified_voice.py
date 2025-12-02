@@ -14,15 +14,26 @@ import json
 import wave
 import threading
 import select
+import torch
 from collections import deque
+
+print("🐍 [Python] Loading Silero VAD model...", flush=True)
+# Load Silero VAD - state-of-the-art speech detection
+torch.set_num_threads(1)  # Use single thread for efficiency
+model_vad, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
+(get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
 
 print("🐍 [Python] Imports complete", flush=True)
 
 # Parse command-line arguments
 no_wake_word = "--no-wake-word" in sys.argv
+always_listening = "--always-listening" in sys.argv
 print(f"🐍 [Python] no_wake_word = {no_wake_word}", flush=True)
+print(f"🐍 [Python] always_listening = {always_listening}", flush=True)
 if no_wake_word:
     sys.argv.remove("--no-wake-word")
+if always_listening:
+    sys.argv.remove("--always-listening")
 
 # Load wake word model only if wake word detection is enabled
 model = None
@@ -46,22 +57,23 @@ if not no_wake_word:
 RATE = 48000  # High quality for recording
 CHUNK = 1024
 PRE_BUFFER_DURATION = 1.5  # Capture 1.5s before wake word
-SILENCE_DURATION = 1.5  # Stop after 1.5s of silence
+# Faster silence detection for always-listening mode
+SILENCE_DURATION = 0.8 if always_listening else 1.5  # Stop after 0.8s/1.5s of silence
 MAX_RECORDING_DURATION = 15.0  # Max 15s recording
 
 # Buffers
 pre_buffer_size = int(RATE * PRE_BUFFER_DURATION)
 pre_buffer = deque(maxlen=pre_buffer_size)
 
-# VAD settings - Increased threshold to ignore background noise
-SILENCE_THRESHOLD = 300  # Increased from 150 - background noise now counts as silence
+# VAD settings
 SILENCE_CHUNKS_THRESHOLD = int((SILENCE_DURATION * RATE) / CHUNK)
+MIN_SPEECH_DURATION_CHUNKS = 3  # Minimum 3 chunks (~64ms) to be considered speech
 
-# Wake word detection settings
-DETECTION_THRESHOLD = 0.80  # Base threshold for detection - 80% confidence required
-HIGH_CONFIDENCE_THRESHOLD = 0.85  # Very high confidence triggers immediately
-MEDIUM_CONFIDENCE_THRESHOLD = 0.80  # Medium confidence requires consecutive detections - 80% confidence required
-CONSECUTIVE_DETECTIONS_REQUIRED = 2  # Require 2 consecutive detections for medium confidence
+# Wake word detection settings - Increased thresholds to reduce false positives
+DETECTION_THRESHOLD = 0.90  # Base threshold for detection - 90% confidence required
+HIGH_CONFIDENCE_THRESHOLD = 0.95  # Very high confidence triggers immediately - 95% confidence
+MEDIUM_CONFIDENCE_THRESHOLD = 0.90  # Medium confidence requires consecutive detections - 90% confidence required
+CONSECUTIVE_DETECTIONS_REQUIRED = 3  # Require 3 consecutive detections for medium confidence (reduced false positives)
 CONFIDENCE_SMOOTHING_WINDOW = deque(maxlen=CONSECUTIVE_DETECTIONS_REQUIRED)
 
 # Get microphone index
@@ -107,6 +119,12 @@ if stream is None:
 # Flags for manual recording control
 record_next = threading.Event()
 stop_recording = threading.Event()
+
+# Always-listening mode state
+speech_buffer = []  # Accumulate speech chunks
+is_speaking = False  # Track if currently in speech
+silence_counter = 0  # Count silent chunks
+active_speech_chunks = 0  # Count consecutive active speech chunks (must meet minimum)
 
 def stdin_listener():
     """Listen for commands from Node.js via stdin"""
@@ -163,11 +181,180 @@ def extract_features(audio_16k):
     return mfcc.T
 
 
+def is_speech_silero(audio_data):
+    """
+    Use Silero VAD to detect if audio contains speech.
+    Silero VAD is state-of-the-art, much more accurate than WebRTC.
+    Better at distinguishing speech from coughs, sniffs, keyboard, background noise.
+
+    Returns: (is_speech, confidence, debug_info)
+    """
+    # Convert to numpy array if needed
+    if isinstance(audio_data, list):
+        audio_array = np.frombuffer(b''.join(audio_data), dtype=np.int16)
+    elif isinstance(audio_data, bytes):
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+    else:
+        audio_array = audio_data
+
+    # Convert to float32 [-1, 1]
+    audio_float = audio_array.astype(np.float32) / 32768.0
+
+    # Resample to 16kHz (Silero requirement)
+    if RATE != 16000:
+        audio_float = librosa.resample(audio_float, orig_sr=RATE, target_sr=16000)
+
+    # Silero requires 512 samples (32ms at 16kHz) per chunk
+    chunk_size = 512
+    num_chunks = len(audio_float) // chunk_size
+
+    if num_chunks < 1:
+        return False, 0.0, "too_short"
+
+    # Process each chunk and average probabilities
+    speech_probs = []
+    for i in range(num_chunks):
+        chunk = audio_float[i * chunk_size:(i + 1) * chunk_size]
+        audio_tensor = torch.from_numpy(chunk)
+        prob = model_vad(audio_tensor, 16000).item()
+        speech_probs.append(prob)
+
+    # Average probability across all chunks
+    avg_speech_prob = np.mean(speech_probs)
+
+    # Count how many chunks are speech
+    speech_chunks = sum(1 for p in speech_probs if p >= 0.5)
+
+    # Threshold: require 30% of chunks to be speech
+    # This allows short utterances while filtering coughs/sniffs
+    is_speech = (speech_chunks / num_chunks) >= 0.30
+
+    debug_info = f"prob={avg_speech_prob:.2f} speech={speech_chunks}/{num_chunks}"
+
+    return is_speech, avg_speech_prob, debug_info
+
+
 def is_silent(audio_data, threshold=0.01):
     """Check if audio is too quiet"""
     audio = np.array(audio_data, dtype=np.float32) / 32768.0
     rms = np.sqrt(np.mean(audio**2))
     return rms < threshold
+
+
+def has_sufficient_energy(audio_data, threshold=0.04):
+    """
+    Check if audio has sufficient energy to be actual speech.
+    Filters out low-energy background noise that might trigger false positives.
+    Threshold increased to 0.04 to ignore quiet sounds like trackpad clicks.
+    """
+    audio = np.array(audio_data, dtype=np.float32) / 32768.0
+    rms = np.sqrt(np.mean(audio**2))
+    return rms >= threshold
+
+
+def has_speech_characteristics(audio_16k):
+    """
+    Check if audio has speech-like spectral characteristics.
+    Human speech has strong energy in 300-3400 Hz range.
+    Returns True if audio looks like speech, False for background noise.
+    """
+    # Calculate power spectral density
+    stft = librosa.stft(audio_16k, n_fft=2048, hop_length=512)
+    magnitude = np.abs(stft)
+    freqs = librosa.fft_frequencies(sr=16000, n_fft=2048)
+
+    # Speech fundamental frequency range (85-255 Hz for male/female voices)
+    # Speech formant range (300-3400 Hz - main energy of speech)
+    speech_low = 300
+    speech_high = 3400
+
+    # Calculate energy in speech frequency band
+    speech_mask = (freqs >= speech_low) & (freqs <= speech_high)
+    speech_energy = np.sum(magnitude[speech_mask, :])
+    total_energy = np.sum(magnitude)
+
+    if total_energy < 1e-10:
+        return False
+
+    speech_ratio = speech_energy / total_energy
+
+    # Speech should have at least 50% of its energy in the 300-3400 Hz range
+    # Background noise and random sounds (like clicks) typically have flatter spectrum
+    # Stricter threshold reduces false positives from non-speech sounds
+    return speech_ratio >= 0.50
+
+
+def is_impulsive_sound(audio_data, verbose=False):
+    """
+    Detect impulsive sounds like coughs, sniffs, clicks, keyboard taps.
+    These sounds have:
+    - Very short duration with sudden onset
+    - High peak-to-RMS ratio (sharp transients)
+    - Irregular amplitude envelope (not smooth like speech)
+
+    Returns (is_impulsive, details_dict)
+    """
+    audio = np.array(audio_data, dtype=np.float32) / 32768.0
+
+    if len(audio) < 100:
+        return True, {"reason": "too_short"}
+
+    # Calculate RMS and peak
+    rms = np.sqrt(np.mean(audio ** 2))
+    peak = np.max(np.abs(audio))
+
+    # Peak-to-RMS ratio (crest factor)
+    # Speech: 3-6, Coughs/sniffs/clicks: 8-20+
+    if rms < 1e-6:
+        return False, {"reason": "silent"}
+
+    crest_factor = peak / rms
+
+    # Calculate zero-crossing rate (how often signal changes sign)
+    # Speech: moderate, Impulsive sounds: very high or very low
+    zero_crossings = np.sum(np.abs(np.diff(np.sign(audio)))) / 2
+    zcr = zero_crossings / len(audio)
+
+    # Calculate envelope smoothness
+    # Split into 10ms chunks and check variance
+    chunk_size = int(0.01 * 48000)  # 10ms at 48kHz
+    if len(audio) < chunk_size * 3:
+        return True, {"reason": "too_short_for_speech"}
+
+    num_chunks = len(audio) // chunk_size
+    chunk_energies = []
+    for i in range(num_chunks):
+        chunk = audio[i * chunk_size:(i + 1) * chunk_size]
+        chunk_energy = np.sqrt(np.mean(chunk ** 2))
+        chunk_energies.append(chunk_energy)
+
+    if len(chunk_energies) < 3:
+        return True, {"reason": "insufficient_chunks"}
+
+    # Coefficient of variation (stddev / mean)
+    # Speech: 0.3-0.8 (relatively smooth), Impulsive: 1.0+ (very spiky)
+    mean_energy = np.mean(chunk_energies)
+    if mean_energy < 1e-6:
+        return False, {"reason": "silent"}
+
+    cv = np.std(chunk_energies) / mean_energy
+
+    # Decision logic
+    # High crest factor = sharp transient (cough, sniff, click)
+    # High CV = very irregular envelope (not smooth speech)
+    is_impulsive = (
+        crest_factor > 8.0 or  # Very sharp peak
+        (crest_factor > 6.0 and cv > 1.2) or  # Sharp peak + irregular
+        cv > 1.5  # Extremely irregular envelope
+    )
+
+    details = {
+        "crest_factor": crest_factor,
+        "cv": cv,
+        "is_impulsive": is_impulsive
+    }
+
+    return is_impulsive, details
 
 
 def is_vibration_sound(audio_16k):
@@ -319,6 +506,93 @@ try:
         # Always add to pre-buffer (rolling window)
         pre_buffer.extend(audio_chunk)
 
+        # Always-listening mode: continuous speech detection with wake word boost
+        if always_listening:
+            rms = calculate_rms(data)
+
+            # Lower threshold since WebRTC VAD will do the real filtering
+            ACTIVITY_THRESHOLD = 400  # Just need to detect "something happening"
+
+            if rms >= ACTIVITY_THRESHOLD:
+                # Potential speech detected
+                if not is_speaking:
+                    # Starting potential speech segment
+                    active_speech_chunks += 1
+
+                    # Only mark as actual speech if minimum duration met
+                    if active_speech_chunks >= MIN_SPEECH_DURATION_CHUNKS:
+                        is_speaking = True
+                        silence_counter = 0
+                        speech_buffer = []
+                        # Include pre-buffer for context
+                        for chunk in pre_buffer:
+                            speech_buffer.append(chunk.tobytes())
+                else:
+                    # Continue accumulating speech
+                    speech_buffer.append(data)
+                    silence_counter = 0
+                    active_speech_chunks += 1
+            else:
+                # Silence detected
+                if is_speaking:
+                    silence_counter += 1
+                    speech_buffer.append(data)  # Keep adding during silence period
+                    active_speech_chunks = 0  # Reset active counter
+
+                    # If silence threshold reached, check for wake word and emit
+                    if silence_counter >= SILENCE_CHUNKS_THRESHOLD:
+                        is_speaking = False
+                        silence_counter = 0
+
+                        # Check if this segment contains speech using WebRTC VAD
+                        if len(speech_buffer) > 0:
+                            # Convert to numpy array
+                            speech_array = np.frombuffer(b''.join(speech_buffer), dtype=np.int16)
+
+                            # Calculate basic stats
+                            rms = int(np.sqrt(np.mean((speech_array.astype(np.float64) ** 2))))
+                            duration_ms = int(len(speech_array) / RATE * 1000)
+
+                            # Silero VAD - State-of-the-art speech detection
+                            is_speech, speech_prob, vad_debug = is_speech_silero(speech_buffer)
+
+                            wake_word_confidence = 0.0
+                            rejected_reason = None
+
+                            if not is_speech:
+                                # Silero VAD says this is NOT speech
+                                # (cough, sniff, keyboard, background noise, etc.)
+                                rejected_reason = "non_speech"
+                                debug_info = f" {vad_debug}"
+                            else:
+                                # Silero VAD confirms this is speech - check wake word
+                                audio_16k = downsample_for_detection(speech_array)
+
+                                # Check if it's the vibration sound
+                                is_vibration = is_vibration_sound(audio_16k)
+                                if is_vibration:
+                                    rejected_reason = "vibration"
+                                    debug_info = ""
+                                else:
+                                    # Run wake word detection
+                                    features = extract_features(audio_16k)
+                                    features = np.expand_dims(features, axis=0)
+                                    wake_word_confidence = model.predict(features, verbose=0)[0][0]
+
+                            # Concise debug output
+                            if rejected_reason:
+                                print(f"⊘ {rejected_reason} (rms={rms}, {duration_ms}ms{debug_info})", flush=True)
+                            else:
+                                print(f"✓ speech (rms={rms}, {duration_ms}ms, wake={wake_word_confidence:.2f}, {vad_debug})", flush=True)
+                                # Only emit if Silero VAD confirms it's speech
+                                save_recording(speech_buffer)
+                                print(f"SPEECH_SEGMENT:{wake_word_confidence:.3f}", flush=True)
+
+                            speech_buffer = []
+                else:
+                    # Not speaking and silence detected - reset counter
+                    active_speech_chunks = 0
+
         # In keyboard-only mode, skip wake word detection
         if no_wake_word:
             continue
@@ -327,14 +601,19 @@ try:
         if cooldown_frames > 0:
             cooldown_frames -= 1
 
-        # Run wake word detection every 5 frames
+        # Run wake word detection every 8 frames (reduced frequency to minimize false positives)
         frame_count += 1
-        if frame_count >= 5 and len(pre_buffer) >= pre_buffer_size and cooldown_frames == 0:
+        if frame_count >= 8 and len(pre_buffer) >= pre_buffer_size and cooldown_frames == 0:
             frame_count = 0
 
             # Skip if too quiet
             if is_silent(list(pre_buffer)):
                 CONFIDENCE_SMOOTHING_WINDOW.clear()  # Reset smoothing on silence
+                continue
+
+            # Skip if insufficient energy (likely background noise)
+            if not has_sufficient_energy(list(pre_buffer)):
+                CONFIDENCE_SMOOTHING_WINDOW.clear()  # Reset smoothing on low energy
                 continue
 
             # Downsample for wake word detection
@@ -343,6 +622,11 @@ try:
             # Skip if this is the vibration sound playing
             if is_vibration_sound(audio_16k):
                 CONFIDENCE_SMOOTHING_WINDOW.clear()  # Reset smoothing on vibration sound
+                continue
+
+            # Skip if audio doesn't have speech-like characteristics
+            if not has_speech_characteristics(audio_16k):
+                CONFIDENCE_SMOOTHING_WINDOW.clear()  # Reset smoothing on non-speech audio
                 continue
 
             # Extract features and run detection
